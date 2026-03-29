@@ -229,7 +229,7 @@ class MoonrakerLaneSyncAdapter:
 
             for local_slot in range(SLOTS_PER_ACE):
                 lane_index = tool_offset + local_slot
-                lane_key = f"lane{lane_index + 1}"
+                lane_key = f"lane{lane_index}"
 
                 inv = {}
                 if local_slot < len(instance.inventory):
@@ -242,6 +242,8 @@ class MoonrakerLaneSyncAdapter:
                 entry = {
                     "lane": str(lane_index),
                     "material": material if has_filament else "",
+                    "filament_name": material if has_filament else "",
+                    "filament_id": material if has_filament else "",
                     "color": self._rgb_to_hex(inv.get("color")) if has_filament else "",
                     "scan_time": "",
                     "td": "",

@@ -418,10 +418,10 @@ EOF
     fi
 
     # ========================================================================
-    # Step 1b: ACE Status Integration (Optional) - Using acepro-mmu-dashboard
+    # Step 1b: ACE Status Integration (Optional)
     # ========================================================================
 
-    ACE_STATUS_DIR="$SCRIPT_DIR/acepro-mmu-dashboard"
+    ACE_STATUS_DIR="$SCRIPT_DIR/ace_status_integration"
     if [ -d "$ACE_STATUS_DIR" ]; then
         print_header "Step 1b: ACE Status Integration (Optional)"
 
@@ -474,7 +474,7 @@ EOF
                 fi
             fi
 
-            # ===== Ensure dashboard source files are world-readable =====
+            # ===== NEW: Ensure dashboard source files are world-readable =====
             print_info "Setting permissions 644 on ACE dashboard source files..."
             if chmod 644 "$ACE_STATUS_DIR"/web/* 2>/dev/null; then
                 print_success "Permissions set on dashboard files"
@@ -485,9 +485,6 @@ EOF
         else
             print_info "ACE status integration skipped"
         fi
-    else
-        print_warning "Dashboard directory not found: $ACE_STATUS_DIR"
-        print_info "Skipping ACE status integration (directory missing)"
     fi
     
     # ========================================================================
