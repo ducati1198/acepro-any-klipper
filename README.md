@@ -133,6 +133,15 @@ Tools are mapped automatically:
 - Instance 1 → T4‑T7
 - Instance 2 → T8‑T11
 
+Add the following lines to your `printer.cfg` to enable the `FORCE_MOVE` safety features (optional, but recommended):
+
+```ini
+[force_move]
+enable_force_move: True
+```
+
+You can place this section anywhere in the file – for example, after the `[printer]` section or near other system‑level configuration blocks. After saving, restart Klipper (`sudo service klipper restart`). This will allow the ACE Pro macros (like `CUT_TIP`) to use the built‑in `FORCE_MOVE` command safely.
+
 ### Sensor Configuration
 
 Both `filament_switch_sensor` and `filament_tracker` are supported. Example:
