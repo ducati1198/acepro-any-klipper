@@ -64,3 +64,20 @@ git clone -b dev https://github.com/ducati1198/acepro-any-klipper
 cd acepro-any-klipper
 chmod +x installer.sh
 ./installer.sh
+
+The installer will:
+
+Detect your Klipper directory.
+
+Create symlinks for the ACE Pro Python modules.
+
+Optionally add the required [include] lines to your printer.cfg.
+
+Optionally install the ACE Pro Dashboard for KlipperScreen.
+
+Ask for your printer type (generic / Kobra‑3 / Kobra‑S1) to copy appropriate default configs.
+
+After the installer finishes, restart Klipper:
+
+```bash
+sudo service klipper restart
