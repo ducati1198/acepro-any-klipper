@@ -189,11 +189,6 @@ class MoonrakerLaneSyncAdapter:
                     self.gcode.respond_info(msg)
                 except Exception:
                     pass
-            # Clean up malformed lane keys (e.g., from mocked tool offsets)
-            for key in list(existing.keys()):
-                if key.startswith("lane") and not self._is_lane_key(key):
-                    self._delete_item(key)
-                    existing.pop(key, None)
 
             for key, value in lanes.items():
                 if not force and existing.get(key) == value:
@@ -248,6 +243,13 @@ class MoonrakerLaneSyncAdapter:
                     "scan_time": "",
                     "td": "",
                 }
+
+                # ===== ADD CUSTOM PRESET NAME =====
+                # Store custom preset name if present (e.g., from ACE_SET_SLOT with FILAMENT_SETTINGS_ID)
+                custom_name = inv.get("custom_name") or inv.get("filament_settings_id")
+                if custom_name and has_filament:
+                    entry["filament_settings_id"] = custom_name
+                # ================================
 
                 nozzle_temp = self._safe_temp(inv.get("temp"))
                 if nozzle_temp is not None:

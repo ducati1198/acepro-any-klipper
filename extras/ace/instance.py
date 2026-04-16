@@ -1329,16 +1329,18 @@ class AceInstance:
             for slot in slots:
                 idx = slot.get("index")
                 if idx is not None and 0 <= idx < self.SLOT_COUNT:
-                    # Get saved metadata (material/color/temp)
+                    # Get saved metadata (material/color/temp/custom_name)
                     saved_color = self.inventory[idx].get("color", [0, 0, 0])
                     saved_material = self.inventory[idx].get("material", "")
                     saved_temp = self.inventory[idx].get("temp", 0)
                     saved_rfid = self.inventory[idx].get("rfid", False)
+                    saved_custom_name = self.inventory[idx].get("custom_name", "")  # <-- added
 
                     updated_color = saved_color
                     updated_material = saved_material
                     updated_temp = saved_temp
                     updated_rfid = None  # Will be set based on transition or status
+                    updated_custom_name = saved_custom_name  # <-- added
 
                     # Get current states
                     old_status = self.inventory[idx].get("status")
@@ -1419,6 +1421,8 @@ class AceInstance:
                             updated_material = ""
                             updated_color = [0, 0, 0]
                             updated_temp = 0
+                            # Optionally clear custom_name when slot becomes empty (or not)
+                            # updated_custom_name = ""   # Uncomment if you want to clear preset name on empty
                             inventory_changed = True  # Force persistence update
 
                     # Handle RFID tag detection - only query get_filament_info, don't use status metadata
@@ -1511,12 +1515,14 @@ class AceInstance:
                         inv.get("color") != updated_color or
                         inv.get("material") != updated_material or
                         inv.get("temp") != updated_temp or
-                            inv.get("rfid") != updated_rfid):
+                        inv.get("rfid") != updated_rfid or
+                        inv.get("custom_name") != updated_custom_name):   # <-- added
                         inv["status"] = new_status
                         inv["color"] = updated_color
                         inv["material"] = updated_material
                         inv["temp"] = updated_temp
                         inv["rfid"] = updated_rfid
+                        inv["custom_name"] = updated_custom_name   # <-- added
 
         # Persist changes if any status changed (deferred; flushed at print end)
         if inventory_changed:
@@ -1692,6 +1698,7 @@ class AceInstance:
                 "material": inv.get("material"),
                 "temp": inv.get("temp"),
                 "rfid": inv.get("rfid", False),
+                "custom_name": inv.get("custom_name", ""),   # <-- added
             }
             for key in [
                 "sku",

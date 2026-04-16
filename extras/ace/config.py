@@ -326,6 +326,7 @@ def create_empty_inventory_slot():
         "material": "",
         "temp": 0,
         "rfid": False,
+        "custom_name": "",           # Added to store preset name
     }
 
 

@@ -702,7 +702,14 @@ def cmd_ACE_SET_SLOT(gcmd):
             raise gcmd.error(f"Invalid slot {idx}")
 
         if gcmd.get_int("EMPTY", 0):
-            ace.inventory[idx] = {"status": "empty", "color": [0, 0, 0], "material": "", "temp": 0, "rfid": False}
+            ace.inventory[idx] = {
+                "status": "empty",
+                "color": [0, 0, 0],
+                "material": "",
+                "temp": 0,
+                "rfid": False,
+                "custom_name": "",                     # <-- added
+            }
             manager = ace_get_manager(ace.instance_num)
             manager._sync_inventory_to_persistent(ace.instance_num)
             gcmd.respond_info(f"Slot {idx} set to empty")
@@ -711,6 +718,7 @@ def cmd_ACE_SET_SLOT(gcmd):
         color_str = gcmd.get("COLOR", None)
         material = gcmd.get("MATERIAL", "")
         temp = gcmd.get_int("TEMP", 0)
+        custom_name = gcmd.get("FILAMENT_SETTINGS_ID", "")   # <-- added
 
         if not color_str or not material or temp < 0:
             raise gcmd.error("COLOR, MATERIAL, and TEMP (0-300) must be set unless EMPTY=1")
@@ -731,10 +739,17 @@ def cmd_ACE_SET_SLOT(gcmd):
                     f"COLOR must be a named color ({', '.join(COLOR_NAMES.keys())}) or R,G,B format"
                 )
 
-        ace.inventory[idx] = {"status": "ready", "color": color, "material": material, "temp": temp, "rfid": False}
+        ace.inventory[idx] = {
+            "status": "ready",
+            "color": color,
+            "material": material,
+            "temp": temp,
+            "rfid": False,
+            "custom_name": custom_name,                # <-- added
+        }
         manager = ace_get_manager(ace.instance_num)
         manager._sync_inventory_to_persistent(ace.instance_num)
-        gcmd.respond_info(f"Slot {idx}: color={color}, material={material}, temp={temp}")
+        gcmd.respond_info(f"Slot {idx}: color={color}, material={material}, temp={temp}, custom_name={custom_name}")  # updated
     except Exception as e:
         gcmd.respond_info(f"ACE_SET_SLOT error: {e}")
 
@@ -2158,7 +2173,7 @@ ACE_COMMANDS = [
     ("ACE_SMART_LOAD", cmd_ACE_SMART_LOAD, "Load all non-empty slots to verification sensor."),
     ("_ACE_HANDLE_PRINT_END", cmd_ACE_HANDLE_PRINT_END, "Execute print end sequence (retract, cut, store)"),
     ("ACE_SET_SLOT", cmd_ACE_SET_SLOT,
-     "Set slot: T=<tool> or INSTANCE= INDEX=, COLOR=<name>|R,G,B MATERIAL= TEMP= or EMPTY=1"),
+     "Set slot: T=<tool> or INSTANCE= INDEX=, COLOR=<name>|R,G,B MATERIAL= TEMP= or EMPTY=1 [FILAMENT_SETTINGS_ID]"),
     ("ACE_SAVE_INVENTORY", cmd_ACE_SAVE_INVENTORY, "Save inventory. INSTANCE="),
     ("ACE_START_DRYING", cmd_ACE_START_DRYING, "Start dryer. [INSTANCE=] TEMP= [DURATION=240]"),
     ("ACE_STOP_DRYING", cmd_ACE_STOP_DRYING, "Stop dryer. [INSTANCE=]"),
