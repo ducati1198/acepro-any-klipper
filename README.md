@@ -74,7 +74,7 @@ The installer will:
 - Create symlinks for the ACE Pro Python modules.
 - Optionally add the required `[include]` lines to your `printer.cfg`.
 - Optionally install the **ACE Pro Dashboard** for KlipperScreen.
-- Ask for your printer type (generic / Kobra‑3 / Kobra‑S1) to copy appropriate default configs.
+- Ask for your printer type
 
 **After the installer finishes, restart Klipper**:
 
