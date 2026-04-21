@@ -1,13 +1,26 @@
 // ValgACE Dashboard JavaScript
-
 const { createApp } = Vue;
+
+// ===== Extensive material list (provided earlier, de‑duplicated) =====
+const BUILT_IN_MATERIALS = [
+  "ABS", "ABS-CF", "ABS-GF", "ASA", "ASA-CF", "ASA-GF", "ASA-AERO",
+  "BVOH", "CoPE", "EVA", "FLEX", "HIPS", "PA", "PA-CF", "PA6", "PA6-CF",
+  "PA6-GF", "PA11", "PA11-CF", "PA11-GF", "PA12", "PA12-CF", "PA12-GF",
+  "PAHT", "PAHT-CF", "PAHT-GF", "PC", "PC-ABS", "PC-CF", "PC-PBT", "PCL",
+  "PCTG", "PE", "PE-CF", "PE-GF", "PEI-1010", "PEI-1010-CF", "PEI-1010-GF",
+  "PEI-9085", "PEI-9085-CF", "PEI-9085-GF", "PEEK", "PEEK-CF", "PEEK-GF",
+  "PEKK", "PEKK-CF", "PES", "PET", "PET-CF", "PET-GF", "PETG", "PETG-CF",
+  "PETG-GF", "PHA", "PI", "PLA", "PLA-AERO", "PLA-CF", "POM", "PP", "PP-CF",
+  "PP-GF", "PPA-CF", "PPA-GF", "PPS", "PPS-CF", "PPSU", "PSU", "PVA", "PVB",
+  "PVDF", "SBS", "TPI", "TPU"
+];
+const UNIQUE_MATERIALS = [...new Set(BUILT_IN_MATERIALS)];
 
 createApp({
     data() {
         return {
             currentLanguage: 'en',
             translations: {
-                // same as before – keep unchanged
                 en: {
                     header: {
                         title: 'ACE Control Panel',
@@ -53,7 +66,8 @@ createApp({
                     slots: {
                         slot: 'Slot',
                         status: 'Status',
-                        type: 'Type',
+                        type: 'Material',
+                        preset: 'Preset Name',
                         temp: 'Temp',
                         sku: 'SKU',
                         rfid: 'RFID'
@@ -94,7 +108,7 @@ createApp({
                         refreshStatus: 'Status refreshed',
                         dryingComplete: 'Drying cycle completed!',
                         validation: {
-                            tempRange: 'Temperature must be between 20 and 55°C',
+                            tempRange: 'Temperature must be between 20 and 65°C',
                             durationMin: 'Duration must be at least 1 minute',
                             feedLength: 'Length must be at least 1 mm',
                             retractLength: 'Length must be at least 1 mm'
@@ -146,7 +160,7 @@ createApp({
             wsConnected: false,
             ws: null,
             apiBase: ACE_DASHBOARD_CONFIG?.apiBase || window.location.origin,
-            
+
             // Device Status
             deviceStatus: {
                 status: 'unknown',
@@ -160,7 +174,7 @@ createApp({
                 usb_port: '',
                 usb_path: ''
             },
-            
+
             // Dryer
             dryerStatus: {
                 status: 'stop',
@@ -170,13 +184,11 @@ createApp({
             },
             dryingTemp: ACE_DASHBOARD_CONFIG?.defaults?.dryingTemp || 50,
             dryingDuration: ACE_DASHBOARD_CONFIG?.defaults?.dryingDuration || 240,
-            dryingHours: 0,
+            dryingHours: 4,
             dryingMinutes: 0,
-            
-            // Local countdown timer
             localRemainingMinutes: null,
             dryerTimerInterval: null,
-            
+
             // Slots
             slots: [],
             currentTool: -1,
@@ -197,26 +209,89 @@ createApp({
                 { name: 'Gray', hex: '#808080' },
                 { name: 'Black', hex: '#000000' }
             ],
-            materialOptions: {
-                'PLA': 200,
-                'PETG': 235,
-                'ABS': 240,
-                'ASA': 245,
-                'PVA': 185,
-                'HIPS': 230,
-                'PC': 260,
-                'PLA+': 210,
-                'PLA Glow': 210,
-                'PLA High Speed': 215,
-                'PLA Marble': 205,
-                'PLA Matte': 205,
-                'PLA SE': 210,
-                'PLA Silk': 215,
-                'TPU': 210
-            },
+            materialOptions: UNIQUE_MATERIALS.reduce((obj, mat) => {
+				let temp = 200;
+				if (mat === 'PLA') temp = 200;
+				else if (mat === 'PLA-CF') temp = 205;
+				else if (mat === 'PLA-AERO') temp = 200;
+				else if (mat === 'PETG') temp = 235;
+				else if (mat === 'PETG-CF') temp = 240;
+				else if (mat === 'PETG-GF') temp = 240;
+				else if (mat === 'ABS') temp = 240;
+				else if (mat === 'ABS-CF') temp = 245;
+				else if (mat === 'ABS-GF') temp = 245;
+				else if (mat === 'ASA') temp = 245;
+				else if (mat === 'ASA-CF') temp = 250;
+				else if (mat === 'ASA-GF') temp = 250;
+				else if (mat === 'ASA-AERO') temp = 245;
+				else if (mat === 'TPU') temp = 210;
+				else if (mat === 'PC') temp = 260;
+				else if (mat === 'PC-CF') temp = 265;
+				else if (mat === 'PC-ABS') temp = 250;
+				else if (mat === 'PC-PBT') temp = 255;
+				else if (mat === 'PA') temp = 260;
+				else if (mat === 'PA-CF') temp = 265;
+				else if (mat === 'PA6') temp = 260;
+				else if (mat === 'PA6-CF') temp = 265;
+				else if (mat === 'PA6-GF') temp = 265;
+				else if (mat === 'PA11') temp = 250;
+				else if (mat === 'PA11-CF') temp = 255;
+				else if (mat === 'PA11-GF') temp = 255;
+				else if (mat === 'PA12') temp = 250;
+				else if (mat === 'PA12-CF') temp = 255;
+				else if (mat === 'PA12-GF') temp = 255;
+				else if (mat === 'PAHT') temp = 270;
+				else if (mat === 'PAHT-CF') temp = 275;
+				else if (mat === 'PAHT-GF') temp = 275;
+				else if (mat === 'PEEK') temp = 380;
+				else if (mat === 'PEEK-CF') temp = 390;
+				else if (mat === 'PEEK-GF') temp = 390;
+				else if (mat === 'PEKK') temp = 370;
+				else if (mat === 'PEKK-CF') temp = 380;
+				else if (mat === 'PEI-1010') temp = 370;
+				else if (mat === 'PEI-1010-CF') temp = 375;
+				else if (mat === 'PEI-1010-GF') temp = 375;
+				else if (mat === 'PEI-9085') temp = 360;
+				else if (mat === 'PEI-9085-CF') temp = 365;
+				else if (mat === 'PEI-9085-GF') temp = 365;
+				else if (mat === 'PPS') temp = 320;
+				else if (mat === 'PPS-CF') temp = 325;
+				else if (mat === 'PPSU') temp = 360;
+				else if (mat === 'PSU') temp = 350;
+				else if (mat === 'PES') temp = 340;
+				else if (mat === 'POM') temp = 220;
+				else if (mat === 'PP') temp = 230;
+				else if (mat === 'PP-CF') temp = 235;
+				else if (mat === 'PP-GF') temp = 235;
+				else if (mat === 'PPA-CF') temp = 280;
+				else if (mat === 'PPA-GF') temp = 280;
+				else if (mat === 'HIPS') temp = 230;
+				else if (mat === 'PVA') temp = 210;
+				else if (mat === 'PVB') temp = 190;
+				else if (mat === 'BVOH') temp = 200;
+				else if (mat === 'PCL') temp = 90;
+				else if (mat === 'PCTG') temp = 240;
+				else if (mat === 'PET') temp = 240;
+				else if (mat === 'PET-CF') temp = 245;
+				else if (mat === 'PET-GF') temp = 245;
+				else if (mat === 'PE') temp = 200;
+				else if (mat === 'PE-CF') temp = 205;
+				else if (mat === 'PE-GF') temp = 205;
+				else if (mat === 'CoPE') temp = 200;
+				else if (mat === 'EVA') temp = 190;
+				else if (mat === 'FLEX') temp = 210;
+				else if (mat === 'SBS') temp = 210;
+				else if (mat === 'TPI') temp = 280;
+				else if (mat === 'PVDF') temp = 240;
+				else if (mat === 'PHA') temp = 200;
+				else if (mat === 'PI') temp = 360;
+                else temp = 0;
+                obj[mat] = temp;
+                return obj;
+            }, {}),
             rfidSyncEnabled: false,
             editingHex: {},
-            
+
             // Modals
             showFeedModal: false,
             showRetractModal: false,
@@ -231,10 +306,11 @@ createApp({
             modalMaterial: '',
             modalTemp: 0,
             modalColorHex: '#ffffff',
-            
+            modalPresetName: '',
+
             presetFeedLength: ACE_DASHBOARD_CONFIG?.defaults?.presetFeedLength || 50,
             presetRetractLength: ACE_DASHBOARD_CONFIG?.defaults?.presetRetractLength || 50,
-            
+
             notification: {
                 show: false,
                 message: '',
@@ -243,10 +319,10 @@ createApp({
 
             // Preset library
             showPresetLibrary: false,
-            presets: []  // now each element has { name, material, temp }
+            presets: []
         };
     },
-    
+
     computed: {
         dryerProgress() {
             const remaining = this.getRemainingMinutes();
@@ -268,7 +344,7 @@ createApp({
             return `${minutes.toString().padStart(2,'0')}:${seconds.toString().padStart(2,'0')}`;
         }
     },
-    
+
     mounted() {
         this.loadPresetsFromPrinter();
         this.connectWebSocket();
@@ -279,11 +355,11 @@ createApp({
             if (this.wsConnected) this.loadAllStatus();
         }, refreshInterval);
     },
-    
+
     beforeDestroy() {
         this.stopDryerTimer();
     },
-    
+
     methods: {
         t(path, params = {}) {
             const keys = path.split('.');
@@ -303,6 +379,7 @@ createApp({
             return undefined;
         },
 
+        // ------------------- Helper UI methods -------------------
         isSlotHexEditing(instIndex, slotIndex) {
             const key = `${instIndex}-${slotIndex}`;
             return !!this.editingHex[key];
@@ -331,30 +408,28 @@ createApp({
             }
             const normalized = hex.trim().startsWith('#') ? hex.trim() : `#${hex.trim()}`;
             slot.hex = normalized;
-            this.setSlotColor(slot.index, instanceIndex, normalized, slot.tool, slot.material || slot.type || '', slot.temp);
+            this.setSlotColor(slot.index, instanceIndex, normalized, slot.tool, slot.material || slot.type || '', slot.temp, slot.custom_name);
             const key = `${instanceIndex}-${slot.index}`;
             const next = { ...this.editingHex };
             delete next[key];
             this.editingHex = next;
         },
-        
+
         getInstanceFeedAssistSlot(instanceIndex) {
             const panel = this.instancesPanels.find(p => p.index === instanceIndex);
             return (panel && typeof panel.feedAssistSlot === 'number') ? panel.feedAssistSlot : -1;
         },
-        
+
         setInstanceFeedAssistSlot(instanceIndex, slotIndex) {
             this.instancesPanels = this.instancesPanels.map(panel => {
-                if (panel.index !== instanceIndex) {
-                    return panel;
-                }
+                if (panel.index !== instanceIndex) return panel;
                 return { ...panel, feedAssistSlot: slotIndex };
             });
             if (instanceIndex === this.selectedInstance) {
                 this.feedAssistSlot = slotIndex;
             }
         },
-        
+
         isSlotLocked(inst, slot) {
             const instIndex = typeof inst === 'number' ? inst : inst?.index;
             const panel = this.instancesPanels.find(p => p.index === instIndex);
@@ -366,11 +441,11 @@ createApp({
             document.title = this.t('header.title');
         },
 
-        // Timer helpers
+        // ------------------- Dryer timer -------------------
         getRemainingMinutes() {
             return this.localRemainingMinutes !== null ? this.localRemainingMinutes : this.dryerStatus.remain_time;
         },
-        
+
         startDryerTimer(initialMinutes) {
             this.stopDryerTimer();
             if (initialMinutes === undefined || initialMinutes === null) {
@@ -392,7 +467,7 @@ createApp({
                 }
             }, 1000);
         },
-        
+
         stopDryerTimer() {
             if (this.dryerTimerInterval) {
                 clearInterval(this.dryerTimerInterval);
@@ -400,7 +475,7 @@ createApp({
             }
             this.localRemainingMinutes = null;
         },
-        
+
         syncRemainingTimeWithAPI(apiRemain) {
             if (!this.dryerTimerInterval) {
                 if (this.dryerStatus.status === 'drying') {
@@ -417,19 +492,18 @@ createApp({
                 }
             }
         },
-        
-        // WebSocket Connection
+
+        // ------------------- WebSocket -------------------
         connectWebSocket() {
             const wsUrl = getWebSocketUrl();
-            
             this.ws = new WebSocket(wsUrl);
-            
             this.ws.onopen = () => {
                 this.wsConnected = true;
                 this.showNotification(this.t('notifications.websocketConnected'), 'success');
                 this.subscribeToStatus();
+                // Immediately fetch status to get latest slot data after connection
+                this.loadAllStatus();
             };
-            
             this.ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
@@ -438,12 +512,10 @@ createApp({
                     console.error('Error parsing WebSocket message:', e);
                 }
             };
-            
             this.ws.onerror = (error) => {
                 console.error('WebSocket error:', error);
                 this.wsConnected = false;
             };
-            
             this.ws.onclose = () => {
                 this.wsConnected = false;
                 this.showNotification(this.t('notifications.websocketDisconnected'), 'error');
@@ -451,22 +523,17 @@ createApp({
                 setTimeout(() => this.connectWebSocket(), reconnectTimeout);
             };
         },
-        
+
         subscribeToStatus() {
             if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-            
             this.ws.send(JSON.stringify({
                 jsonrpc: "2.0",
                 method: "printer.objects.subscribe",
-                params: {
-                    objects: {
-                        "ace": null
-                    }
-                },
+                params: { objects: { "ace": null } },
                 id: 5434
             }));
         },
-        
+
         handleWebSocketMessage(data) {
             if (data.method === "notify_status_update") {
                 const aceData = data.params[0]?.ace;
@@ -478,15 +545,15 @@ createApp({
                 }
             }
         },
-        
-        // API Calls
+
+        // ------------------- API Calls -------------------
         async loadAllStatus() {
             await Promise.all([
                 this.loadStatusForInstance(this.selectedInstance, 'main'),
                 this.loadStatusForInstance(this.selectedDryerInstance, 'dryer')
             ]);
         },
-        
+
         async loadStatusForInstance(instance, target) {
             try {
                 const response = await fetch(`${this.apiBase}/server/ace/status?instance=${instance}`);
@@ -505,7 +572,7 @@ createApp({
                 }
             }
         },
-        
+
         updateMainStatus(data) {
             if (!data || typeof data !== 'object') {
                 console.warn('Invalid main status data:', data);
@@ -523,28 +590,26 @@ createApp({
             if (incomingCurrentTool !== null) {
                 this.currentTool = incomingCurrentTool;
             }
-            
+
             if (typeof data.rfid_sync_enabled === 'boolean') {
                 this.rfidSyncEnabled = data.rfid_sync_enabled;
             }
-            
+
             if (ACE_DASHBOARD_CONFIG?.debug) {
                 console.log('Updating main status with data:', data);
             }
-            
+
             const instances = Array.isArray(data.instances) ? data.instances : [];
             this.instanceOptions = instances
                 .map(item => ({ index: typeof item?.index === 'number' ? item.index : 0 }))
                 .sort((a, b) => a.index - b.index);
             if (typeof data.instance_index === 'number') {
-                if (
-                    !Number.isInteger(this.selectedInstance) ||
-                    !this.instanceOptions.find(opt => opt.index === this.selectedInstance)
-                ) {
+                if (!Number.isInteger(this.selectedInstance) ||
+                    !this.instanceOptions.find(opt => opt.index === this.selectedInstance)) {
                     this.selectedInstance = data.instance_index;
                 }
             }
-            
+
             if (data.status !== undefined) this.deviceStatus.status = data.status;
             if (data.connection_state !== undefined) this.deviceStatus.connection_state = data.connection_state || 'unknown';
             if (data.model !== undefined) this.deviceStatus.model = data.model;
@@ -555,7 +620,7 @@ createApp({
             if (data.usb_port !== undefined) this.deviceStatus.usb_port = data.usb_port;
             if (data.usb_path !== undefined) this.deviceStatus.usb_path = data.usb_path;
             if (data.enable_rfid !== undefined) this.deviceStatus.enable_rfid = data.enable_rfid;
-            
+
             const instancesRaw = Array.isArray(data.instances) ? data.instances : [];
             const prevPanels = this.instancesPanels || [];
             if (instancesRaw.length > 0) {
@@ -564,24 +629,33 @@ createApp({
                     const prevPanel = prevPanels.find(p => p.index === item.index);
                     return {
                         index: typeof item.index === 'number' ? item.index : 0,
-                        slots: slotsArr.map(slot => ({
-                            index: slot.index !== undefined ? slot.index : -1,
-                            tool: slot.tool !== undefined ? slot.tool : null,
-                            status: slot.status || 'unknown',
-                            type: slot.type || slot.material || '',
-                            material: slot.material || slot.type || '',
-                            temp: typeof slot.temp === 'number' ? slot.temp : 0,
-                            color: Array.isArray(slot.color) ? slot.color : [0, 0, 0],
-                            hex: this.isSlotHexEditing(item.index, slot.index)
-                                ? this.getPreviousHex(prevPanel, slot.index) || this.getColorHex(slot.color)
-                                : this.getColorHex(slot.color),
-                            sku: slot.sku || '',
-                            rfid: slot.rfid !== undefined ? slot.rfid : 0,
-                            customFeedLength: ACE_DASHBOARD_CONFIG?.defaults?.feedLength || 50,
-                            customFeedSpeed: ACE_DASHBOARD_CONFIG?.defaults?.feedSpeed || 25,
-                            customRetractLength: ACE_DASHBOARD_CONFIG?.defaults?.retractLength || 50,
-                            customRetractSpeed: ACE_DASHBOARD_CONFIG?.defaults?.retractSpeed || 25
-                        })),
+                        slots: slotsArr.map((slot, idx) => {
+                            const existingSlot = prevPanel?.slots?.find(s => s.index === slot.index);
+                            let customName = (slot.custom_name && slot.custom_name.trim()) ? slot.custom_name : (existingSlot?.custom_name || '');
+                            // If still empty, try localStorage
+                            if (!customName) {
+                                customName = this._loadPresetFromLocalStorage(item.index, slot.index);
+                            }
+                            return {
+                                index: slot.index !== undefined ? slot.index : -1,
+                                tool: slot.tool !== undefined ? slot.tool : null,
+                                status: slot.status || 'unknown',
+                                type: slot.type || slot.material || '',
+                                material: slot.material || slot.type || '',
+                                temp: typeof slot.temp === 'number' ? slot.temp : 0,
+                                color: Array.isArray(slot.color) ? slot.color : [0, 0, 0],
+                                hex: this.isSlotHexEditing(item.index, slot.index)
+                                    ? this.getPreviousHex(prevPanel, slot.index) || this.getColorHex(slot.color)
+                                    : this.getColorHex(slot.color),
+                                sku: slot.sku || '',
+                                rfid: slot.rfid !== undefined ? slot.rfid : 0,
+                                custom_name: customName,
+                                customFeedLength: ACE_DASHBOARD_CONFIG?.defaults?.feedLength || 50,
+                                customFeedSpeed: ACE_DASHBOARD_CONFIG?.defaults?.feedSpeed || 25,
+                                customRetractLength: ACE_DASHBOARD_CONFIG?.defaults?.retractLength || 50,
+                                customRetractSpeed: ACE_DASHBOARD_CONFIG?.defaults?.retractSpeed || 25
+                            };
+                        }),
                         feedAssistSlot: typeof item.feed_assist_slot === 'number' ? item.feed_assist_slot : -1,
                         rfidSyncEnabled: typeof item.rfid_sync_enabled === 'boolean' ? item.rfid_sync_enabled : this.rfidSyncEnabled
                     };
@@ -593,24 +667,32 @@ createApp({
                 }
             } else if (data.slots !== undefined) {
                 if (Array.isArray(data.slots)) {
-                    this.slots = data.slots.map(slot => ({
-                        index: slot.index !== undefined ? slot.index : -1,
-                        tool: slot.tool !== undefined ? slot.tool : null,
-                        status: slot.status || 'unknown',
-                        type: slot.type || slot.material || '',
-                        material: slot.material || slot.type || '',
-                        color: Array.isArray(slot.color) ? slot.color : [0, 0, 0],
-                        hex: this.isSlotHexEditing(this.selectedInstance, slot.index)
-                            ? (this.slots.find(s => s.index === slot.index)?.hex || this.getColorHex(slot.color))
-                            : this.getColorHex(slot.color),
-                        temp: typeof slot.temp === 'number' ? slot.temp : 0,
-                        sku: slot.sku || '',
-                        rfid: slot.rfid !== undefined ? slot.rfid : 0,
-                        customFeedLength: ACE_DASHBOARD_CONFIG?.defaults?.feedLength || 50,
-                        customFeedSpeed: ACE_DASHBOARD_CONFIG?.defaults?.feedSpeed || 25,
-                        customRetractLength: ACE_DASHBOARD_CONFIG?.defaults?.retractLength || 50,
-                        customRetractSpeed: ACE_DASHBOARD_CONFIG?.defaults?.retractSpeed || 25
-                    }));
+                    this.slots = data.slots.map(slot => {
+                        const existingSlot = this.slots.find(s => s.index === slot.index);
+                        let customName = (slot.custom_name && slot.custom_name.trim()) ? slot.custom_name : (existingSlot?.custom_name || '');
+                        if (!customName) {
+                            customName = this._loadPresetFromLocalStorage(this.selectedInstance, slot.index);
+                        }
+                        return {
+                            index: slot.index !== undefined ? slot.index : -1,
+                            tool: slot.tool !== undefined ? slot.tool : null,
+                            status: slot.status || 'unknown',
+                            type: slot.type || slot.material || '',
+                            material: slot.material || slot.type || '',
+                            color: Array.isArray(slot.color) ? slot.color : [0, 0, 0],
+                            hex: this.isSlotHexEditing(this.selectedInstance, slot.index)
+                                ? (this.slots.find(s => s.index === slot.index)?.hex || this.getColorHex(slot.color))
+                                : this.getColorHex(slot.color),
+                            temp: typeof slot.temp === 'number' ? slot.temp : 0,
+                            sku: slot.sku || '',
+                            rfid: slot.rfid !== undefined ? slot.rfid : 0,
+                            custom_name: customName,
+                            customFeedLength: ACE_DASHBOARD_CONFIG?.defaults?.feedLength || 50,
+                            customFeedSpeed: ACE_DASHBOARD_CONFIG?.defaults?.feedSpeed || 25,
+                            customRetractLength: ACE_DASHBOARD_CONFIG?.defaults?.retractLength || 50,
+                            customRetractSpeed: ACE_DASHBOARD_CONFIG?.defaults?.retractSpeed || 25
+                        };
+                    });
                 } else {
                     console.warn('Slots data is not an array:', data.slots);
                 }
@@ -625,12 +707,12 @@ createApp({
                 }
             }
         },
-        
+
         updateDryerStatus(data) {
             const dryer = data.dryer || data.dryer_status;
             const oldStatus = this.dryerStatus.status;
             let newRemain = null;
-            
+
             if (dryer && typeof dryer === 'object') {
                 if (dryer.duration !== undefined) this.dryerStatus.duration = Math.floor(dryer.duration);
                 if (dryer.remain_time !== undefined) {
@@ -640,14 +722,11 @@ createApp({
                     newRemain = remain;
                     this.dryerStatus.remain_time = remain;
                 }
-                if (dryer.status !== undefined) {
-                    this.dryerStatus.status = dryer.status;
-                }
+                if (dryer.status !== undefined) this.dryerStatus.status = dryer.status;
                 if (dryer.target_temp !== undefined) this.dryerStatus.target_temp = dryer.target_temp;
             }
             if (data.dryer_target_temp !== undefined) this.dryerStatus.target_temp = data.dryer_target_temp;
-            
-            // Timer management
+
             if (this.dryerStatus.status === 'drying') {
                 if (oldStatus !== 'drying') {
                     this.startDryerTimer(newRemain);
@@ -660,15 +739,15 @@ createApp({
                 this.stopDryerTimer();
             }
         },
-        
+
         onInstanceChange() {
             this.loadStatusForInstance(this.selectedInstance, 'main');
         },
-        
+
         onDryerInstanceChange() {
             this.loadStatusForInstance(this.selectedDryerInstance, 'dryer');
         },
-        
+
         async executeCommand(command, params = {}) {
             try {
                 const instance = params.INSTANCE !== undefined ? params.INSTANCE : this.selectedInstance;
@@ -697,14 +776,14 @@ createApp({
                 return false;
             }
         },
-        
+
         async changeToolForInstance(tool, instanceIndex) {
             const success = await this.executeCommand('ACE_CHANGE_TOOL', { TOOL: tool, INSTANCE: instanceIndex });
             if (success && instanceIndex === this.selectedInstance) {
                 this.currentTool = tool;
             }
         },
-        
+
         async unloadFilament(instanceIndex) {
             await this.changeToolForInstance(-1, instanceIndex);
         },
@@ -736,20 +815,63 @@ createApp({
             }
         },
 
+        // ========== ENHANCED SAVE INVENTORY ==========
         async saveInventoryAll() {
-            let anySuccess = false;
             const instances = this.instanceOptions.length > 0 ? this.instanceOptions : [{ index: this.selectedInstance || 0 }];
+            let anySlotUpdated = false;
+            let allSuccessful = true;
+
+            for (const inst of instances) {
+                const panel = this.instancesPanels.find(p => p.index === inst.index);
+                if (!panel || !Array.isArray(panel.slots)) continue;
+
+                for (const slot of panel.slots) {
+                    if (slot.status === 'empty') continue;
+                    if (!slot.material || slot.material.trim() === '') continue;
+
+                    const toolNumber = this.getSlotToolNumber(slot, inst.index);
+                    const hex = this.getColorHex(slot.color);
+                    const presetName = slot.custom_name || '';
+
+                    const success = await this.setSlotColor(
+                        slot.index,
+                        inst.index,
+                        hex,
+                        toolNumber,
+                        slot.material,
+                        slot.temp,
+                        presetName
+                    );
+                    
+                    if (success) {
+                        anySlotUpdated = true;
+                    } else {
+                        allSuccessful = false;
+                    }
+                    
+                    // Small delay to avoid flooding the command queue
+                    await new Promise(resolve => setTimeout(resolve, 150));
+                }
+            }
+
+            let saveSuccess = true;
             for (const inst of instances) {
                 const success = await this.executeCommand('ACE_SAVE_INVENTORY', { INSTANCE: inst.index });
-                if (success) anySuccess = true;
+                if (!success) saveSuccess = false;
             }
-            if (anySuccess) {
+
+            if (anySlotUpdated && saveSuccess) {
                 this.showNotification(this.t('notifications.commandSuccess', { command: 'ACE_SAVE_INVENTORY' }), 'success');
+                setTimeout(() => this.loadAllStatus(), 500);
+            } else if (anySlotUpdated && !saveSuccess) {
+                this.showNotification('Slots updated but inventory save failed', 'error');
+            } else if (!anySlotUpdated) {
+                this.showNotification('No slots were updated (all empty or no material)', 'info');
             } else {
                 this.showNotification(this.t('notifications.commandErrorGeneric'), 'error');
             }
         },
-        
+
         async toggleFeedAssist(index, instanceIndex) {
             const targetInstance = Number.isInteger(instanceIndex) ? instanceIndex : (this.selectedInstance || 0);
             const activeSlot = this.getInstanceFeedAssistSlot(targetInstance);
@@ -762,7 +884,7 @@ createApp({
                 await this.enableFeedAssist(index, targetInstance);
             }
         },
-        
+
         async enableFeedAssist(index, instanceIndex) {
             const targetInstance = Number.isInteger(instanceIndex) ? instanceIndex : (this.selectedInstance || 0);
             const activeSlot = this.getInstanceFeedAssistSlot(targetInstance);
@@ -776,7 +898,7 @@ createApp({
             }
             return success;
         },
-        
+
         async disableFeedAssist(index, instanceIndex, silent = false) {
             const targetInstance = Number.isInteger(instanceIndex) ? instanceIndex : (this.selectedInstance || 0);
             const success = await this.executeCommand('ACE_DISABLE_FEED_ASSIST', { INDEX: index, INSTANCE: targetInstance });
@@ -788,7 +910,7 @@ createApp({
             }
             return success;
         },
-        
+
         // Dryer actions
         startDryingFromInput() {
             if (this.dryingTemp < 20 || this.dryingTemp > 55) {
@@ -807,11 +929,11 @@ createApp({
                 INSTANCE: this.selectedDryerInstance
             });
         },
-        
+
         stopDrying() {
             this.executeCommand('ACE_STOP_DRYING', { INSTANCE: this.selectedDryerInstance });
         },
-        
+
         // Feed/Retract
         async executeCustomFeed(slot, instanceIndex) {
             if (slot.customFeedLength < 1) {
@@ -825,7 +947,7 @@ createApp({
                 INSTANCE: instanceIndex
             });
         },
-        
+
         async executeCustomRetract(slot, instanceIndex) {
             if (slot.customRetractLength < 1) {
                 this.showNotification('Retract length must be at least 1 mm', 'error');
@@ -838,18 +960,18 @@ createApp({
                 INSTANCE: instanceIndex
             });
         },
-        
+
         showFeedDialog(slot) {
             this.feedSlot = slot;
             this.feedLength = ACE_DASHBOARD_CONFIG?.defaults?.feedLength || 50;
             this.feedSpeed = ACE_DASHBOARD_CONFIG?.defaults?.feedSpeed || 25;
             this.showFeedModal = true;
         },
-        
+
         closeFeedDialog() {
             this.showFeedModal = false;
         },
-        
+
         async executeFeed() {
             if (this.feedLength < 1) {
                 this.showNotification(this.t('notifications.validation.feedLength'), 'error');
@@ -862,18 +984,18 @@ createApp({
             });
             if (success) this.closeFeedDialog();
         },
-        
+
         showRetractDialog(slot) {
             this.retractSlot = slot;
             this.retractLength = ACE_DASHBOARD_CONFIG?.defaults?.retractLength || 50;
             this.retractSpeed = ACE_DASHBOARD_CONFIG?.defaults?.retractSpeed || 25;
             this.showRetractModal = true;
         },
-        
+
         closeRetractDialog() {
             this.showRetractModal = false;
         },
-        
+
         async executeRetract() {
             if (this.retractLength < 1) {
                 this.showNotification(this.t('notifications.validation.retractLength'), 'error');
@@ -886,35 +1008,35 @@ createApp({
             });
             if (success) this.closeRetractDialog();
         },
-        
+
         async refreshStatus() {
             await this.loadAllStatus();
             this.showNotification(this.t('notifications.refreshStatus'), 'success');
         },
-        
+
         // Utility Functions
         getStatusText(status) {
             return this.t(`statusMap.${status}`) || status;
         },
-        
+
         getConnectionStateText(state) {
             const key = state || 'unknown';
             return this.t(`connectionStateMap.${key}`) || this.t('common.unknown');
         },
-        
+
         connectionBadgeClass() {
             if (!this.wsConnected) return 'disconnected';
             return this.deviceStatus.connection_state || 'unknown';
         },
-        
+
         getDryerStatusText(status) {
             return this.t(`dryerStatusMap.${status}`) || status;
         },
-        
+
         getSlotStatusText(status) {
             return this.t(`slotStatusMap.${status}`) || status;
         },
-        
+
         getRfidStatusText(rfid) {
             let key;
             if (rfid === true) key = 2;
@@ -931,14 +1053,14 @@ createApp({
             const str = String(rfid).toLowerCase();
             return str === '2' || str === 'identified';
         },
-        
+
         formatUsbPath(port, usbPath) {
             if (port && usbPath) return `${port} (${usbPath})`;
             if (port) return port;
             if (usbPath) return usbPath;
             return this.t('common.unknown');
         },
-        
+
         getColorHex(color) {
             if (!color || !Array.isArray(color) || color.length < 3) return '#000000';
             const r = Math.max(0, Math.min(255, color[0])).toString(16).padStart(2, '0');
@@ -946,7 +1068,7 @@ createApp({
             const b = Math.max(0, Math.min(255, color[2])).toString(16).padStart(2, '0');
             return `#${r}${g}${b}`;
         },
-        
+
         rgbToHex(rgb) {
             if (!Array.isArray(rgb) || rgb.length < 3) return '#000000';
             const [r, g, b] = rgb.map(v => Math.max(0, Math.min(255, Number(v) || 0)));
@@ -961,149 +1083,7 @@ createApp({
             return [(intVal >> 16) & 255, (intVal >> 8) & 255, intVal & 255];
         },
 
-        async setSlotColor(slotIndex, instanceIndex, hex, toolNumber = null, material = '', temp = 0) {
-            const rgb = this.hexToRgb(hex);
-            if (!rgb) {
-                this.showNotification('Invalid color', 'error');
-                return false;
-            }
-            
-            // Properly quote the material name (always quote for safety)
-            const quotedMaterial = `"${material.replace(/"/g, '\\"')}"`;
-            
-            const toolParam = toolNumber !== null ? `T=${toolNumber}` : `INDEX=${slotIndex}`;
-            const command = `ACE_SET_SLOT ${toolParam} COLOR="${rgb[0]},${rgb[1]},${rgb[2]}" MATERIAL=${quotedMaterial} TEMP=${temp} INSTANCE=${instanceIndex}`;
-            
-            const success = await this.sendGcodeScript(command);
-            if (success) {
-                setTimeout(() => this.loadStatusForInstance(instanceIndex, 'main'), 500);
-            }
-            return success;
-        },
-
-        async sendGcodeScript(script) {
-            try {
-                const response = await fetch(`${this.apiBase}/printer/gcode/script`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ script })
-                });
-                const result = await response.json();
-                
-                if (result.error) {
-                    console.error('G‑code script error:', result.error);
-                    this.showNotification(`Error: ${result.error}`, 'error');
-                    return false;
-                }
-                if (result.result && result.result.success === false) {
-                    const errorMsg = result.result.error || result.result.message || 'Command failed';
-                    this.showNotification(`Command failed: ${errorMsg}`, 'error');
-                    return false;
-                }
-                this.showNotification(`Command sent: ${script.split(' ')[0]}`, 'success');
-                return true;
-            } catch (error) {
-                console.error('Error sending G‑code script:', error);
-                this.showNotification(`Network error: ${error.message}`, 'error');
-                return false;
-            }
-        },
-
-        async setSlotMaterial(slotIndex, instanceIndex, toolNumber, material, currentColor, currentTemp) {
-            const panel = this.instancesPanels.find(p => p.index === instanceIndex);
-            const locked = (panel && panel.rfidSyncEnabled) ? (panel.slots.find(s => s.index === slotIndex)?.rfid === 2) : false;
-            if (locked) {
-                this.showNotification('RFID locked: disable RFID sync to edit', 'error');
-                return;
-            }
-            const hex = this.getColorHex(currentColor);
-            const preset = this.presets.find(p => p.name === material);
-            let temp;
-            if (preset) {
-                temp = preset.temp;
-            } else {
-                temp = this.materialOptions[material] || currentTemp || 200;
-            }
-            const success = await this.setSlotColor(slotIndex, instanceIndex, hex, toolNumber, material, temp);
-            if (success) {
-                this.showNotification(`Slot ${slotIndex} updated: ${material}`, 'success');
-            } else {
-                this.showNotification(`Failed to update slot ${slotIndex}`, 'error');
-            }
-        },
-
-        async setSlotTemp(slotIndex, instanceIndex, toolNumber, tempValue, currentColor, currentMaterial) {
-            const panel = this.instancesPanels.find(p => p.index === instanceIndex);
-            const locked = (panel && panel.rfidSyncEnabled) ? (panel.slots.find(s => s.index === slotIndex)?.rfid === 2) : false;
-            if (locked) {
-                this.showNotification('RFID locked: disable RFID sync to edit', 'error');
-                return;
-            }
-            const hex = this.getColorHex(currentColor);
-            let temp = Number(tempValue);
-            if (!Number.isFinite(temp) || temp <= 0 || temp > 300) temp = 200;
-            const success = await this.setSlotColor(slotIndex, instanceIndex, hex, toolNumber, currentMaterial, temp);
-            if (success) {
-                this.showNotification(`Slot ${slotIndex} temperature set to ${temp}°C`, 'success');
-            } else {
-                this.showNotification(`Failed to set temperature for slot ${slotIndex}`, 'error');
-            }
-        },
-
-        commitSlotTemp(slotIndex, instanceIndex, toolNumber, event, currentColor, currentMaterial) {
-            const val = event && event.target ? event.target.value : null;
-            const parsed = Number(val);
-            const temp = (!Number.isFinite(parsed) || parsed <= 0 || parsed > 300) ? 200 : parsed;
-            if (event && event.target) event.target.value = temp;
-            this.setSlotTemp(slotIndex, instanceIndex, toolNumber, temp, currentColor, currentMaterial);
-            this.updateLocalSlotTemp(instanceIndex, slotIndex, temp);
-        },
-
-        updateLocalSlotTemp(instanceIndex, slotIndex, temp) {
-            this.instancesPanels = this.instancesPanels.map(panel => {
-                if (panel.index !== instanceIndex) return panel;
-                const slots = panel.slots.map(slot => {
-                    if (slot.index === slotIndex) return { ...slot, temp };
-                    return slot;
-                });
-                return { ...panel, slots };
-            });
-            if (this.selectedInstance === instanceIndex) {
-                this.slots = this.slots.map(slot => {
-                    if (slot.index === slotIndex) return { ...slot, temp };
-                    return slot;
-                });
-            }
-        },
-
-        getSlotToolNumber(slot, instanceIndex) {
-            if (slot && slot.tool !== null && slot.tool !== undefined) {
-                const toolNum = Number(slot.tool);
-                return Number.isInteger(toolNum) ? toolNum : null;
-            }
-            const slotIndex = Number(slot?.index);
-            if (!Number.isInteger(slotIndex)) return null;
-            const panel = this.instancesPanels.find(p => p.index === instanceIndex);
-            if (panel && Array.isArray(panel.slots)) {
-                const sample = panel.slots.find(s => Number.isInteger(Number(s?.tool)) && Number.isInteger(Number(s?.index)));
-                if (sample) {
-                    const sampleTool = Number(sample.tool);
-                    const sampleIndex = Number(sample.index);
-                    const offset = sampleTool - sampleIndex;
-                    return offset + slotIndex;
-                }
-            }
-            if (this.instancesPanels.length <= 1) return slotIndex;
-            return null;
-        },
-
-        isCurrentToolSlot(slot, instanceIndex) {
-            if (!Number.isInteger(this.currentTool) || this.currentTool < 0) return false;
-            const slotTool = this.getSlotToolNumber(slot, instanceIndex);
-            return slotTool !== null && slotTool === this.currentTool;
-        },
-        
-        // Preset library methods (updated to handle three fields)
+        // Preset library methods
         async loadPresetsFromPrinter() {
             try {
                 const response = await fetch(`${this.apiBase}/server/files/config/ace_orca_presets.json`);
@@ -1150,13 +1130,10 @@ createApp({
                     try {
                         const text = await file.text();
                         const data = JSON.parse(text);
-                        // Extract name: filament_settings_id, then name, then filename
                         let name = data.filament_settings_id || data.name || file.name.replace(/\.json$/, '');
                         if (Array.isArray(name)) name = name[0];
-                        // Extract material: filament_type
                         let material = data.filament_type || '';
                         if (Array.isArray(material)) material = material[0];
-                        // Extract temperature: nozzle_temperature
                         let temp = data.nozzle_temperature || data.temperature || 200;
                         if (Array.isArray(temp)) temp = temp[0];
                         const preset = {
@@ -1197,12 +1174,13 @@ createApp({
             }
         },
 
-        // Colour picker modal methods
+        // Colour picker modal modifications
         openColorPickerModal(slot, instanceIndex) {
             this.colorPickerTarget = { slot: { ...slot }, instanceIndex };
             this.modalMaterial = slot.material || slot.type || '';
             this.modalTemp = slot.temp || 0;
             this.modalColorHex = this.getColorHex(slot.color);
+            this.modalPresetName = slot.custom_name || '';
             this.showColorPickerModal = true;
         },
 
@@ -1212,15 +1190,17 @@ createApp({
         },
 
         onModalMaterialChange() {
-            const selected = this.modalMaterial;
-            const preset = this.presets.find(p => p.name === selected);
+            const builtInTemp = this.materialOptions[this.modalMaterial];
+            if (builtInTemp !== undefined) {
+                this.modalTemp = builtInTemp;
+            }
+        },
+
+        onModalPresetChange() {
+            const preset = this.presets.find(p => p.name === this.modalPresetName);
             if (preset) {
+                this.modalMaterial = preset.material;
                 this.modalTemp = preset.temp;
-            } else {
-                const builtInTemp = this.materialOptions[selected];
-                if (builtInTemp !== undefined) {
-                    this.modalTemp = builtInTemp;
-                }
             }
         },
 
@@ -1238,13 +1218,174 @@ createApp({
             const hex = this.modalColorHex;
             const material = this.modalMaterial;
             const temp = this.modalTemp;
-            const success = await this.setSlotColor(slot.index, instanceIndex, hex, slot.tool, material, temp);
+            const presetName = this.modalPresetName.trim();
+
+            const rgb = this.hexToRgb(hex);
+            if (!rgb) {
+                this.showNotification('Invalid color', 'error');
+                return;
+            }
+
+            const toolParam = slot.tool !== null && slot.tool !== undefined ? `T=${slot.tool}` : `INDEX=${slot.index}`;
+            const quotedMaterial = `"${material.replace(/"/g, '\\"')}"`;
+            let command = `ACE_SET_SLOT ${toolParam} COLOR="${rgb[0]},${rgb[1]},${rgb[2]}" MATERIAL=${quotedMaterial} TEMP=${temp} INSTANCE=${instanceIndex}`;
+            if (presetName) {
+                command += ` FILAMENT_SETTINGS_ID="${presetName.replace(/"/g, '\\"')}"`;
+            }
+
+            const success = await this.sendGcodeScript(command);
             if (success) {
                 this.closeColorPickerModal();
                 this.showNotification('Slot updated', 'success');
+                setTimeout(() => this.loadStatusForInstance(instanceIndex, 'main'), 500);
             } else {
                 this.showNotification('Update failed', 'error');
             }
+        },
+
+        async sendGcodeScript(script) {
+            try {
+                const response = await fetch(`${this.apiBase}/printer/gcode/script`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ script })
+                });
+                const result = await response.json();
+                if (result.error) {
+                    console.error('G‑code script error:', result.error);
+                    this.showNotification(`Error: ${result.error}`, 'error');
+                    return false;
+                }
+                if (result.result && result.result.success === false) {
+                    const errorMsg = result.result.error || result.result.message || 'Command failed';
+                    this.showNotification(`Command failed: ${errorMsg}`, 'error');
+                    return false;
+                }
+                this.showNotification(`Command sent: ${script.split(' ')[0]}`, 'success');
+                return true;
+            } catch (error) {
+                console.error('Error sending G‑code script:', error);
+                this.showNotification(`Network error: ${error.message}`, 'error');
+                return false;
+            }
+        },
+
+        async setSlotColor(slotIndex, instanceIndex, hex, toolNumber = null, material = '', temp = 0, presetName = '') {
+            const rgb = this.hexToRgb(hex);
+            if (!rgb) {
+                this.showNotification('Invalid color', 'error');
+                return false;
+            }
+            const quotedMaterial = `"${material.replace(/"/g, '\\"')}"`;
+            const toolParam = toolNumber !== null ? `T=${toolNumber}` : `INDEX=${slotIndex}`;
+            let command = `ACE_SET_SLOT ${toolParam} COLOR="${rgb[0]},${rgb[1]},${rgb[2]}" MATERIAL=${quotedMaterial} TEMP=${temp} INSTANCE=${instanceIndex}`;
+            if (presetName) {
+                command += ` FILAMENT_SETTINGS_ID="${presetName.replace(/"/g, '\\"')}"`;
+            }
+            const success = await this.sendGcodeScript(command);
+            if (success) {
+                setTimeout(() => this.loadStatusForInstance(instanceIndex, 'main'), 500);
+            }
+            return success;
+        },
+
+        async setSlotMaterial(slotIndex, instanceIndex, toolNumber, material, currentColor, currentTemp, presetName = '') {
+            const panel = this.instancesPanels.find(p => p.index === instanceIndex);
+            const locked = (panel && panel.rfidSyncEnabled) ? (panel.slots.find(s => s.index === slotIndex)?.rfid === 2) : false;
+            if (locked) {
+                this.showNotification('RFID locked: disable RFID sync to edit', 'error');
+                return;
+            }
+            const hex = this.getColorHex(currentColor);
+            let temp;
+            if (presetName) {
+                const preset = this.presets.find(p => p.name === presetName);
+                if (preset) {
+                    temp = preset.temp;
+                    material = preset.material;
+                } else {
+                    temp = this.materialOptions[material] || currentTemp || 200;
+                }
+            } else {
+                temp = this.materialOptions[material] || currentTemp || 200;
+            }
+            const success = await this.setSlotColor(slotIndex, instanceIndex, hex, toolNumber, material, temp, presetName);
+            if (success) {
+                this.showNotification(`Slot ${slotIndex} updated: ${material}${presetName ? ` (${presetName})` : ''}`, 'success');
+            } else {
+                this.showNotification(`Failed to update slot ${slotIndex}`, 'error');
+            }
+        },
+
+        async setSlotTemp(slotIndex, instanceIndex, toolNumber, tempValue, currentColor, currentMaterial, presetName = '') {
+            const panel = this.instancesPanels.find(p => p.index === instanceIndex);
+            const locked = (panel && panel.rfidSyncEnabled) ? (panel.slots.find(s => s.index === slotIndex)?.rfid === 2) : false;
+            if (locked) {
+                this.showNotification('RFID locked: disable RFID sync to edit', 'error');
+                return;
+            }
+            const hex = this.getColorHex(currentColor);
+            let temp = Number(tempValue);
+            if (!Number.isFinite(temp) || temp <= 0 || temp > 300) temp = 200;
+            const success = await this.setSlotColor(slotIndex, instanceIndex, hex, toolNumber, currentMaterial, temp, presetName);
+            if (success) {
+                this.showNotification(`Slot ${slotIndex} temperature set to ${temp}°C`, 'success');
+            } else {
+                this.showNotification(`Failed to set temperature for slot ${slotIndex}`, 'error');
+            }
+        },
+
+        commitSlotTemp(slotIndex, instanceIndex, toolNumber, event, currentColor, currentMaterial, presetName = '') {
+            const val = event && event.target ? event.target.value : null;
+            const parsed = Number(val);
+            const temp = (!Number.isFinite(parsed) || parsed <= 0 || parsed > 300) ? 200 : parsed;
+            if (event && event.target) event.target.value = temp;
+            this.setSlotTemp(slotIndex, instanceIndex, toolNumber, temp, currentColor, currentMaterial, presetName);
+            this.updateLocalSlotTemp(instanceIndex, slotIndex, temp);
+        },
+
+        updateLocalSlotTemp(instanceIndex, slotIndex, temp) {
+            this.instancesPanels = this.instancesPanels.map(panel => {
+                if (panel.index !== instanceIndex) return panel;
+                const slots = panel.slots.map(slot => {
+                    if (slot.index === slotIndex) return { ...slot, temp };
+                    return slot;
+                });
+                return { ...panel, slots };
+            });
+            if (this.selectedInstance === instanceIndex) {
+                this.slots = this.slots.map(slot => {
+                    if (slot.index === slotIndex) return { ...slot, temp };
+                    return slot;
+                });
+            }
+        },
+
+        getSlotToolNumber(slot, instanceIndex) {
+            if (slot && slot.tool !== null && slot.tool !== undefined) {
+                const toolNum = Number(slot.tool);
+                return Number.isInteger(toolNum) ? toolNum : null;
+            }
+            const slotIndex = Number(slot?.index);
+            if (!Number.isInteger(slotIndex)) return null;
+            const panel = this.instancesPanels.find(p => p.index === instanceIndex);
+            if (panel && Array.isArray(panel.slots)) {
+                const sample = panel.slots.find(s => Number.isInteger(Number(s?.tool)) && Number.isInteger(Number(s?.index)));
+                if (sample) {
+                    const sampleTool = Number(sample.tool);
+                    const sampleIndex = Number(sample.index);
+                    const offset = sampleTool - sampleIndex;
+                    return offset + slotIndex;
+                }
+            }
+            if (this.instancesPanels.length <= 1) return slotIndex;
+            return null;
+        },
+
+        isCurrentToolSlot(slot, instanceIndex) {
+            if (!Number.isInteger(this.currentTool) || this.currentTool < 0) return false;
+            const slotTool = this.getSlotToolNumber(slot, instanceIndex);
+            return slotTool !== null && slotTool === this.currentTool;
         },
 
         // Save/Load slot settings to/from printer
@@ -1256,7 +1397,8 @@ createApp({
                     material: slot.material,
                     color: slot.color,
                     temp: slot.temp,
-                    hex: slot.hex
+                    hex: slot.hex,
+                    custom_name: slot.custom_name
                 }))
             })) };
             const json = JSON.stringify(settings, null, 2);
@@ -1277,7 +1419,15 @@ createApp({
             }
         },
 
+        // ========== ENHANCED LOAD FROM PRINTER WITH WEBSOCKET BLOCKING ==========
         async loadFromPrinter() {
+            // Save the original WebSocket handler and temporarily disable it
+            let originalHandler = null;
+            if (this.ws) {
+                originalHandler = this.ws.onmessage;
+                this.ws.onmessage = () => {}; // Block incoming status updates
+            }
+
             try {
                 const response = await fetch(`${this.apiBase}/server/files/config/ace_dashboard_settings.json`);
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -1294,7 +1444,8 @@ createApp({
                                         material: savedSlot.material || slot.material,
                                         color: savedSlot.color || slot.color,
                                         temp: savedSlot.temp !== undefined ? savedSlot.temp : slot.temp,
-                                        hex: savedSlot.hex || slot.hex
+                                        hex: savedSlot.hex || slot.hex,
+                                        custom_name: savedSlot.custom_name || slot.custom_name
                                     };
                                 }
                                 return slot;
@@ -1307,10 +1458,20 @@ createApp({
                     const selectedPanel = updatedPanels.find(p => p.index === this.selectedInstance);
                     if (selectedPanel) this.slots = selectedPanel.slots;
                     this.showNotification('Settings loaded from printer', 'success');
+
+                    // Save the loaded data to the ACE inventory (still with WebSocket blocked)
+                    await this.saveInventoryAll();
+                    this.showNotification('Settings saved to ACE inventory', 'success');
                 }
             } catch (error) {
                 console.error('Load from printer error:', error);
                 if (!error.message.includes('404')) this.showNotification('Failed to load settings', 'error');
+            } finally {
+                // Restore the original WebSocket handler and refresh status
+                if (this.ws && originalHandler) {
+                    this.ws.onmessage = originalHandler;
+                }
+                await this.loadAllStatus();
             }
         },
 
@@ -1321,7 +1482,7 @@ createApp({
             if (hours > 0) return `${hours}${this.t('time.hours')} ${mins}${this.t('time.minutesShort')}`;
             return `${mins} ${this.t('time.minutes')}`;
         },
-        
+
         formatRemainingTime(minutes) {
             if (!minutes || minutes <= 0) return `0${this.t('time.minutesShort')} 0${this.t('time.secondsShort')}`;
             const totalMinutes = Math.floor(minutes);
@@ -1333,10 +1494,122 @@ createApp({
             }
             return `${seconds}${this.t('time.secondsShort')}`;
         },
-        
+
         showNotification(message, type = 'info') {
             this.notification = { show: true, message, type };
             setTimeout(() => { this.notification.show = false; }, 3000);
+        },
+
+        // ========== LocalStorage helpers for custom_name persistence ==========
+        _getStorageKey(instanceIndex, slotIndex) {
+            return `ace_preset_${instanceIndex}_${slotIndex}`;
+        },
+
+        _savePresetToLocalStorage(instanceIndex, slotIndex, presetName) {
+            if (presetName) {
+                localStorage.setItem(this._getStorageKey(instanceIndex, slotIndex), presetName);
+            } else {
+                localStorage.removeItem(this._getStorageKey(instanceIndex, slotIndex));
+            }
+        },
+
+        _loadPresetFromLocalStorage(instanceIndex, slotIndex) {
+            return localStorage.getItem(this._getStorageKey(instanceIndex, slotIndex)) || '';
+        },
+
+        // Apply preset to slot (with fix for "None" selection)
+        async applyPresetToSlot(slot, instanceIndex, presetName) {
+            if (!presetName) {
+                // Clear the preset name locally
+                slot.custom_name = '';
+                this._savePresetToLocalStorage(instanceIndex, slot.index, '');
+
+                // Send command to printer without FILAMENT_SETTINGS_ID
+                const hex = this.getColorHex(slot.color);
+                const success = await this.setSlotColor(
+                    slot.index,
+                    instanceIndex,
+                    hex,
+                    slot.tool,
+                    slot.material,
+                    slot.temp,
+                    ''  // empty presetName -> no FILAMENT_SETTINGS_ID in command
+                );
+                if (success) {
+                    this.showNotification(`Preset cleared for slot ${slot.index}`, 'success');
+                    // Update local copies
+                    this.updateLocalSlotTemp(instanceIndex, slot.index, slot.temp);
+                    const panel = this.instancesPanels.find(p => p.index === instanceIndex);
+                    if (panel) {
+                        const localSlot = panel.slots.find(s => s.index === slot.index);
+                        if (localSlot) localSlot.custom_name = '';
+                    }
+                    if (this.selectedInstance === instanceIndex) {
+                        const currentSlot = this.slots.find(s => s.index === slot.index);
+                        if (currentSlot) currentSlot.custom_name = '';
+                    }
+                } else {
+                    // Revert UI change on failure (keep old preset name)
+                    const oldPreset = this._loadPresetFromLocalStorage(instanceIndex, slot.index);
+                    slot.custom_name = oldPreset;
+                    this.showNotification('Failed to clear preset', 'error');
+                }
+                return;
+            }
+
+            // Existing logic for non‑empty presetName
+            const preset = this.presets.find(p => p.name === presetName);
+            if (!preset) {
+                this.showNotification(`Preset "${presetName}" not found`, 'error');
+                return;
+            }
+            // Update the slot data immediately for responsive UI
+            slot.material = preset.material;
+            slot.temp = preset.temp;
+            slot.custom_name = presetName;
+
+            // Save to localStorage so it survives a refresh
+            this._savePresetToLocalStorage(instanceIndex, slot.index, presetName);
+
+            // Send command to printer
+            const hex = this.getColorHex(slot.color);
+            const success = await this.setSlotColor(
+                slot.index,
+                instanceIndex,
+                hex,
+                slot.tool,
+                preset.material,
+                preset.temp,
+                presetName
+            );
+            if (success) {
+                this.showNotification(`Preset "${presetName}" applied to slot ${slot.index}`, 'success');
+                // Refresh local slot list to reflect changes
+                this.updateLocalSlotTemp(instanceIndex, slot.index, preset.temp);
+                // Also update material in local copy
+                const panel = this.instancesPanels.find(p => p.index === instanceIndex);
+                if (panel) {
+                    const localSlot = panel.slots.find(s => s.index === slot.index);
+                    if (localSlot) {
+                        localSlot.material = preset.material;
+                        localSlot.custom_name = presetName;
+                    }
+                }
+                if (this.selectedInstance === instanceIndex) {
+                    const currentSlot = this.slots.find(s => s.index === slot.index);
+                    if (currentSlot) {
+                        currentSlot.material = preset.material;
+                        currentSlot.custom_name = presetName;
+                    }
+                }
+            } else {
+                // Revert on failure
+                slot.material = slot.material; // keep old
+                slot.temp = slot.temp;
+                slot.custom_name = slot.custom_name;
+                // Remove from localStorage if command failed
+                this._savePresetToLocalStorage(instanceIndex, slot.index, '');
+            }
         }
     }
 }).mount('#app');
