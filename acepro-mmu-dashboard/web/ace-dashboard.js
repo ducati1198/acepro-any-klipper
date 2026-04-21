@@ -210,81 +210,81 @@ createApp({
                 { name: 'Black', hex: '#000000' }
             ],
             materialOptions: UNIQUE_MATERIALS.reduce((obj, mat) => {
-				let temp = 200;
-				if (mat === 'PLA') temp = 200;
-				else if (mat === 'PLA-CF') temp = 205;
-				else if (mat === 'PLA-AERO') temp = 200;
-				else if (mat === 'PETG') temp = 235;
-				else if (mat === 'PETG-CF') temp = 240;
-				else if (mat === 'PETG-GF') temp = 240;
-				else if (mat === 'ABS') temp = 240;
-				else if (mat === 'ABS-CF') temp = 245;
-				else if (mat === 'ABS-GF') temp = 245;
-				else if (mat === 'ASA') temp = 245;
-				else if (mat === 'ASA-CF') temp = 250;
-				else if (mat === 'ASA-GF') temp = 250;
-				else if (mat === 'ASA-AERO') temp = 245;
-				else if (mat === 'TPU') temp = 210;
-				else if (mat === 'PC') temp = 260;
-				else if (mat === 'PC-CF') temp = 265;
-				else if (mat === 'PC-ABS') temp = 250;
-				else if (mat === 'PC-PBT') temp = 255;
-				else if (mat === 'PA') temp = 260;
-				else if (mat === 'PA-CF') temp = 265;
-				else if (mat === 'PA6') temp = 260;
-				else if (mat === 'PA6-CF') temp = 265;
-				else if (mat === 'PA6-GF') temp = 265;
-				else if (mat === 'PA11') temp = 250;
-				else if (mat === 'PA11-CF') temp = 255;
-				else if (mat === 'PA11-GF') temp = 255;
-				else if (mat === 'PA12') temp = 250;
-				else if (mat === 'PA12-CF') temp = 255;
-				else if (mat === 'PA12-GF') temp = 255;
-				else if (mat === 'PAHT') temp = 270;
-				else if (mat === 'PAHT-CF') temp = 275;
-				else if (mat === 'PAHT-GF') temp = 275;
-				else if (mat === 'PEEK') temp = 380;
-				else if (mat === 'PEEK-CF') temp = 390;
-				else if (mat === 'PEEK-GF') temp = 390;
-				else if (mat === 'PEKK') temp = 370;
-				else if (mat === 'PEKK-CF') temp = 380;
-				else if (mat === 'PEI-1010') temp = 370;
-				else if (mat === 'PEI-1010-CF') temp = 375;
-				else if (mat === 'PEI-1010-GF') temp = 375;
-				else if (mat === 'PEI-9085') temp = 360;
-				else if (mat === 'PEI-9085-CF') temp = 365;
-				else if (mat === 'PEI-9085-GF') temp = 365;
-				else if (mat === 'PPS') temp = 320;
-				else if (mat === 'PPS-CF') temp = 325;
-				else if (mat === 'PPSU') temp = 360;
-				else if (mat === 'PSU') temp = 350;
-				else if (mat === 'PES') temp = 340;
-				else if (mat === 'POM') temp = 220;
-				else if (mat === 'PP') temp = 230;
-				else if (mat === 'PP-CF') temp = 235;
-				else if (mat === 'PP-GF') temp = 235;
-				else if (mat === 'PPA-CF') temp = 280;
-				else if (mat === 'PPA-GF') temp = 280;
-				else if (mat === 'HIPS') temp = 230;
-				else if (mat === 'PVA') temp = 210;
-				else if (mat === 'PVB') temp = 190;
-				else if (mat === 'BVOH') temp = 200;
-				else if (mat === 'PCL') temp = 90;
-				else if (mat === 'PCTG') temp = 240;
-				else if (mat === 'PET') temp = 240;
-				else if (mat === 'PET-CF') temp = 245;
-				else if (mat === 'PET-GF') temp = 245;
-				else if (mat === 'PE') temp = 200;
-				else if (mat === 'PE-CF') temp = 205;
-				else if (mat === 'PE-GF') temp = 205;
-				else if (mat === 'CoPE') temp = 200;
-				else if (mat === 'EVA') temp = 190;
-				else if (mat === 'FLEX') temp = 210;
-				else if (mat === 'SBS') temp = 210;
-				else if (mat === 'TPI') temp = 280;
-				else if (mat === 'PVDF') temp = 240;
-				else if (mat === 'PHA') temp = 200;
-				else if (mat === 'PI') temp = 360;
+                let temp = 200;
+                if (mat === 'PLA') temp = 200;
+                else if (mat === 'PLA-CF') temp = 205;
+                else if (mat === 'PLA-AERO') temp = 200;
+                else if (mat === 'PETG') temp = 235;
+                else if (mat === 'PETG-CF') temp = 240;
+                else if (mat === 'PETG-GF') temp = 240;
+                else if (mat === 'ABS') temp = 240;
+                else if (mat === 'ABS-CF') temp = 245;
+                else if (mat === 'ABS-GF') temp = 245;
+                else if (mat === 'ASA') temp = 245;
+                else if (mat === 'ASA-CF') temp = 250;
+                else if (mat === 'ASA-GF') temp = 250;
+                else if (mat === 'ASA-AERO') temp = 245;
+                else if (mat === 'TPU') temp = 210;
+                else if (mat === 'PC') temp = 260;
+                else if (mat === 'PC-CF') temp = 265;
+                else if (mat === 'PC-ABS') temp = 250;
+                else if (mat === 'PC-PBT') temp = 255;
+                else if (mat === 'PA') temp = 260;
+                else if (mat === 'PA-CF') temp = 265;
+                else if (mat === 'PA6') temp = 260;
+                else if (mat === 'PA6-CF') temp = 265;
+                else if (mat === 'PA6-GF') temp = 265;
+                else if (mat === 'PA11') temp = 250;
+                else if (mat === 'PA11-CF') temp = 255;
+                else if (mat === 'PA11-GF') temp = 255;
+                else if (mat === 'PA12') temp = 250;
+                else if (mat === 'PA12-CF') temp = 255;
+                else if (mat === 'PA12-GF') temp = 255;
+                else if (mat === 'PAHT') temp = 270;
+                else if (mat === 'PAHT-CF') temp = 275;
+                else if (mat === 'PAHT-GF') temp = 275;
+                else if (mat === 'PEEK') temp = 380;
+                else if (mat === 'PEEK-CF') temp = 390;
+                else if (mat === 'PEEK-GF') temp = 390;
+                else if (mat === 'PEKK') temp = 370;
+                else if (mat === 'PEKK-CF') temp = 380;
+                else if (mat === 'PEI-1010') temp = 370;
+                else if (mat === 'PEI-1010-CF') temp = 375;
+                else if (mat === 'PEI-1010-GF') temp = 375;
+                else if (mat === 'PEI-9085') temp = 360;
+                else if (mat === 'PEI-9085-CF') temp = 365;
+                else if (mat === 'PEI-9085-GF') temp = 365;
+                else if (mat === 'PPS') temp = 320;
+                else if (mat === 'PPS-CF') temp = 325;
+                else if (mat === 'PPSU') temp = 360;
+                else if (mat === 'PSU') temp = 350;
+                else if (mat === 'PES') temp = 340;
+                else if (mat === 'POM') temp = 220;
+                else if (mat === 'PP') temp = 230;
+                else if (mat === 'PP-CF') temp = 235;
+                else if (mat === 'PP-GF') temp = 235;
+                else if (mat === 'PPA-CF') temp = 280;
+                else if (mat === 'PPA-GF') temp = 280;
+                else if (mat === 'HIPS') temp = 230;
+                else if (mat === 'PVA') temp = 210;
+                else if (mat === 'PVB') temp = 190;
+                else if (mat === 'BVOH') temp = 200;
+                else if (mat === 'PCL') temp = 90;
+                else if (mat === 'PCTG') temp = 240;
+                else if (mat === 'PET') temp = 240;
+                else if (mat === 'PET-CF') temp = 245;
+                else if (mat === 'PET-GF') temp = 245;
+                else if (mat === 'PE') temp = 200;
+                else if (mat === 'PE-CF') temp = 205;
+                else if (mat === 'PE-GF') temp = 205;
+                else if (mat === 'CoPE') temp = 200;
+                else if (mat === 'EVA') temp = 190;
+                else if (mat === 'FLEX') temp = 210;
+                else if (mat === 'SBS') temp = 210;
+                else if (mat === 'TPI') temp = 280;
+                else if (mat === 'PVDF') temp = 240;
+                else if (mat === 'PHA') temp = 200;
+                else if (mat === 'PI') temp = 360;
                 else temp = 0;
                 obj[mat] = temp;
                 return obj;
@@ -501,7 +501,6 @@ createApp({
                 this.wsConnected = true;
                 this.showNotification(this.t('notifications.websocketConnected'), 'success');
                 this.subscribeToStatus();
-                // Immediately fetch status to get latest slot data after connection
                 this.loadAllStatus();
             };
             this.ws.onmessage = (event) => {
@@ -631,10 +630,15 @@ createApp({
                         index: typeof item.index === 'number' ? item.index : 0,
                         slots: slotsArr.map((slot, idx) => {
                             const existingSlot = prevPanel?.slots?.find(s => s.index === slot.index);
-                            let customName = (slot.custom_name && slot.custom_name.trim()) ? slot.custom_name : (existingSlot?.custom_name || '');
-                            // If still empty, try localStorage
-                            if (!customName) {
-                                customName = this._loadPresetFromLocalStorage(item.index, slot.index);
+                            // Preserve empty string from printer; fallback to existing slot or localStorage only if printer didn't provide a value
+                            let customName;
+                            if (slot.custom_name !== undefined) {
+                                customName = slot.custom_name;
+                            } else {
+                                customName = existingSlot?.custom_name || '';
+                                if (!customName) {
+                                    customName = this._loadPresetFromLocalStorage(item.index, slot.index);
+                                }
                             }
                             return {
                                 index: slot.index !== undefined ? slot.index : -1,
@@ -669,9 +673,14 @@ createApp({
                 if (Array.isArray(data.slots)) {
                     this.slots = data.slots.map(slot => {
                         const existingSlot = this.slots.find(s => s.index === slot.index);
-                        let customName = (slot.custom_name && slot.custom_name.trim()) ? slot.custom_name : (existingSlot?.custom_name || '');
-                        if (!customName) {
-                            customName = this._loadPresetFromLocalStorage(this.selectedInstance, slot.index);
+                        let customName;
+                        if (slot.custom_name !== undefined) {
+                            customName = slot.custom_name;
+                        } else {
+                            customName = existingSlot?.custom_name || '';
+                            if (!customName) {
+                                customName = this._loadPresetFromLocalStorage(this.selectedInstance, slot.index);
+                            }
                         }
                         return {
                             index: slot.index !== undefined ? slot.index : -1,
@@ -849,7 +858,6 @@ createApp({
                         allSuccessful = false;
                     }
                     
-                    // Small delay to avoid flooding the command queue
                     await new Promise(resolve => setTimeout(resolve, 150));
                 }
             }
@@ -1229,12 +1237,12 @@ createApp({
             const toolParam = slot.tool !== null && slot.tool !== undefined ? `T=${slot.tool}` : `INDEX=${slot.index}`;
             const quotedMaterial = `"${material.replace(/"/g, '\\"')}"`;
             let command = `ACE_SET_SLOT ${toolParam} COLOR="${rgb[0]},${rgb[1]},${rgb[2]}" MATERIAL=${quotedMaterial} TEMP=${temp} INSTANCE=${instanceIndex}`;
-            if (presetName) {
-                command += ` FILAMENT_SETTINGS_ID="${presetName.replace(/"/g, '\\"')}"`;
-            }
+            command += ` FILAMENT_SETTINGS_ID="${presetName.replace(/"/g, '\\"')}"`;
 
             const success = await this.sendGcodeScript(command);
             if (success) {
+                slot.custom_name = presetName;
+                this._savePresetToLocalStorage(instanceIndex, slot.index, presetName);
                 this.closeColorPickerModal();
                 this.showNotification('Slot updated', 'success');
                 setTimeout(() => this.loadStatusForInstance(instanceIndex, 'main'), 500);
@@ -1278,10 +1286,9 @@ createApp({
             }
             const quotedMaterial = `"${material.replace(/"/g, '\\"')}"`;
             const toolParam = toolNumber !== null ? `T=${toolNumber}` : `INDEX=${slotIndex}`;
+            // Always include FILAMENT_SETTINGS_ID, even if empty (to clear)
             let command = `ACE_SET_SLOT ${toolParam} COLOR="${rgb[0]},${rgb[1]},${rgb[2]}" MATERIAL=${quotedMaterial} TEMP=${temp} INSTANCE=${instanceIndex}`;
-            if (presetName) {
-                command += ` FILAMENT_SETTINGS_ID="${presetName.replace(/"/g, '\\"')}"`;
-            }
+            command += ` FILAMENT_SETTINGS_ID="${presetName.replace(/"/g, '\\"')}"`;
             const success = await this.sendGcodeScript(command);
             if (success) {
                 setTimeout(() => this.loadStatusForInstance(instanceIndex, 'main'), 500);
@@ -1421,11 +1428,10 @@ createApp({
 
         // ========== ENHANCED LOAD FROM PRINTER WITH WEBSOCKET BLOCKING ==========
         async loadFromPrinter() {
-            // Save the original WebSocket handler and temporarily disable it
             let originalHandler = null;
             if (this.ws) {
                 originalHandler = this.ws.onmessage;
-                this.ws.onmessage = () => {}; // Block incoming status updates
+                this.ws.onmessage = () => {};
             }
 
             try {
@@ -1439,13 +1445,15 @@ createApp({
                             const updatedSlots = panel.slots.map(slot => {
                                 const savedSlot = savedInst.slots.find(s => s.index === slot.index);
                                 if (savedSlot) {
+                                    // Preserve empty string exactly as saved
+                                    const customName = savedSlot.custom_name !== undefined ? savedSlot.custom_name : slot.custom_name;
                                     return {
                                         ...slot,
-                                        material: savedSlot.material || slot.material,
+                                        material: savedSlot.material !== undefined ? savedSlot.material : slot.material,
                                         color: savedSlot.color || slot.color,
                                         temp: savedSlot.temp !== undefined ? savedSlot.temp : slot.temp,
                                         hex: savedSlot.hex || slot.hex,
-                                        custom_name: savedSlot.custom_name || slot.custom_name
+                                        custom_name: customName
                                     };
                                 }
                                 return slot;
@@ -1459,7 +1467,6 @@ createApp({
                     if (selectedPanel) this.slots = selectedPanel.slots;
                     this.showNotification('Settings loaded from printer', 'success');
 
-                    // Save the loaded data to the ACE inventory (still with WebSocket blocked)
                     await this.saveInventoryAll();
                     this.showNotification('Settings saved to ACE inventory', 'success');
                 }
@@ -1467,7 +1474,6 @@ createApp({
                 console.error('Load from printer error:', error);
                 if (!error.message.includes('404')) this.showNotification('Failed to load settings', 'error');
             } finally {
-                // Restore the original WebSocket handler and refresh status
                 if (this.ws && originalHandler) {
                     this.ws.onmessage = originalHandler;
                 }
@@ -1520,11 +1526,9 @@ createApp({
         // Apply preset to slot (with fix for "None" selection)
         async applyPresetToSlot(slot, instanceIndex, presetName) {
             if (!presetName) {
-                // Clear the preset name locally
                 slot.custom_name = '';
                 this._savePresetToLocalStorage(instanceIndex, slot.index, '');
 
-                // Send command to printer without FILAMENT_SETTINGS_ID
                 const hex = this.getColorHex(slot.color);
                 const success = await this.setSlotColor(
                     slot.index,
@@ -1533,11 +1537,10 @@ createApp({
                     slot.tool,
                     slot.material,
                     slot.temp,
-                    ''  // empty presetName -> no FILAMENT_SETTINGS_ID in command
+                    ''  // empty string -> will send FILAMENT_SETTINGS_ID=""
                 );
                 if (success) {
                     this.showNotification(`Preset cleared for slot ${slot.index}`, 'success');
-                    // Update local copies
                     this.updateLocalSlotTemp(instanceIndex, slot.index, slot.temp);
                     const panel = this.instancesPanels.find(p => p.index === instanceIndex);
                     if (panel) {
@@ -1549,7 +1552,6 @@ createApp({
                         if (currentSlot) currentSlot.custom_name = '';
                     }
                 } else {
-                    // Revert UI change on failure (keep old preset name)
                     const oldPreset = this._loadPresetFromLocalStorage(instanceIndex, slot.index);
                     slot.custom_name = oldPreset;
                     this.showNotification('Failed to clear preset', 'error');
@@ -1557,21 +1559,17 @@ createApp({
                 return;
             }
 
-            // Existing logic for non‑empty presetName
             const preset = this.presets.find(p => p.name === presetName);
             if (!preset) {
                 this.showNotification(`Preset "${presetName}" not found`, 'error');
                 return;
             }
-            // Update the slot data immediately for responsive UI
             slot.material = preset.material;
             slot.temp = preset.temp;
             slot.custom_name = presetName;
 
-            // Save to localStorage so it survives a refresh
             this._savePresetToLocalStorage(instanceIndex, slot.index, presetName);
 
-            // Send command to printer
             const hex = this.getColorHex(slot.color);
             const success = await this.setSlotColor(
                 slot.index,
@@ -1584,9 +1582,7 @@ createApp({
             );
             if (success) {
                 this.showNotification(`Preset "${presetName}" applied to slot ${slot.index}`, 'success');
-                // Refresh local slot list to reflect changes
                 this.updateLocalSlotTemp(instanceIndex, slot.index, preset.temp);
-                // Also update material in local copy
                 const panel = this.instancesPanels.find(p => p.index === instanceIndex);
                 if (panel) {
                     const localSlot = panel.slots.find(s => s.index === slot.index);
@@ -1603,11 +1599,9 @@ createApp({
                     }
                 }
             } else {
-                // Revert on failure
-                slot.material = slot.material; // keep old
+                slot.material = slot.material;
                 slot.temp = slot.temp;
                 slot.custom_name = slot.custom_name;
-                // Remove from localStorage if command failed
                 this._savePresetToLocalStorage(instanceIndex, slot.index, '');
             }
         }
