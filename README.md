@@ -70,6 +70,23 @@ chmod +x installer.sh
 ./installer.sh
 ```
 
+UPDATING THE GITHUB
+```
+Erase the acepro-any-klipper:
+
+rm -rf ~/acepro-any-klipper
+
+After follow the install process
+
+NOTE:
+AFTER A UPDATE OR FRESH INSTALL NEED TO FORCE A HARD REFRESH OR CLEAR YOUR CACHE IN YOUR BROWSER:
+
+You can force a hard refresh on your browser each time you update:
+
+Windows/Linux: Ctrl + F5 or Ctrl + Shift + R
+
+Mac: Cmd + Shift + R
+
 The installer will:
 - Detect your Klipper directory.
 - Create symlinks for the ACE Pro Python modules.
@@ -379,12 +396,3 @@ This fork focuses on making the driver work with **any** Klipper printer, with a
 ---
 
 **Happy printing!** 🖨️
-
-
-UPDATING THE GITHUB
-```
-Erase the acepro-any-klipper:
-
-rm -rf ~/acepro-any-klipper
-
-After follow the install process
