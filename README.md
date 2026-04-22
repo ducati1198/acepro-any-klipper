@@ -77,6 +77,7 @@ Erase the acepro-any-klipper:
 rm -rf ~/acepro-any-klipper
 
 After follow the install process
+```
 
 NOTE:
 AFTER A UPDATE OR FRESH INSTALL NEED TO FORCE A HARD REFRESH OR CLEAR YOUR CACHE IN YOUR BROWSER:
