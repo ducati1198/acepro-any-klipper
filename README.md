@@ -380,6 +380,8 @@ This fork focuses on making the driver work with **any** Klipper printer, with a
 
 **Happy printing!** 🖨️
 
+
+UPDATING THE GITHUB
 ```
 ✅ Option 1:
 ## 🔄 Updating the Repository (When `git pull` Fails)
