@@ -59,6 +59,7 @@ Automatically handles filament loading, tool changes, purging, wiping, and even 
 - One or more ACE Pro units, connected via USB.
 - A working Klipper installation (virtualenv recommended).
 
+``` 
 ### One‑Click Installer (Recommended)
 
 ```bash
