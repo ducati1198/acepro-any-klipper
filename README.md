@@ -381,4 +381,13 @@ This fork focuses on making the driver work with **any** Klipper printer, with a
 **Happy printing!** 🖨️
 ```
 
-Simply copy the entire block above, paste it into a text editor, and save it as `README.md` in your repository. You can also download it directly if you prefer, but the text is provided above.
+## 🔄 Updating the Repository (When `git pull` Fails)
+
+If you see an error like `fatal: Need to specify how to reconcile divergent branches`, the remote `dev` branch has been updated with a force push. Choose one of the following methods to update your local copy.
+
+### ✅ Option 1: Discard Local Changes and Match Remote Exactly (Recommended)
+If you have **no local changes you need to keep**, run these commands from inside the `acepro-any-klipper` directory:
+
+```bash
+git fetch origin dev
+git reset --hard origin/dev
