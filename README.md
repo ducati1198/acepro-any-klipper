@@ -81,18 +81,6 @@ The installer will:
 ```bash
 sudo service klipper restart
 ```
-
-### Manual Installation (Advanced)
-
-If you prefer manual setup:
-
-```bash
-cd ~/klipper/klippy/extras
-git clone -b dev https://github.com/ducati1198/acepro-any-klipper ace
-cd ace
-pip3 install pyserial --upgrade
-```
-
 Then add the following to your `printer.cfg`:
 
 ```ini
