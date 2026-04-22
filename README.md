@@ -383,32 +383,8 @@ This fork focuses on making the driver work with **any** Klipper printer, with a
 
 UPDATING THE GITHUB
 ```
-✅ Option 1:
-## 🔄 Updating the Repository (When `git pull` Fails)
+Erase the acepro-any-klipper:
 
-If you see an error like `fatal: Need to specify how to reconcile divergent branches`, the remote `dev` branch has been updated with a force push. Choose one of the following methods to update your local copy.
+rm -rf ~/acepro-any-klipper
 
-### ✅ Option 1: Discard Local Changes and Match Remote Exactly (Recommended)
-If you have **no local changes you need to keep**, run these commands from inside the `acepro-any-klipper` directory:
-
-cd ~/acepro-any-klipper
-git fetch origin dev
-git reset --hard origin/dev
-This makes your local dev branch identical to the remote dev branch. After that, re‑run the installer:
-
-./installer.sh
-
-✅ Option 2: Keep Your Local Modifications
-If you have made custom changes that you want to preserve, use git stash:
-
-bash
-git stash push -m "My local changes"
-git pull --rebase origin dev
-git stash pop
-If conflicts occur during stash pop, you will need to resolve them manually in the affected files.
-
-📦 After Updating
-Always run the installer again to ensure symlinks and configuration files are up‑to‑date:
-
-cd ~/acepro-any-klipper
-./installer.sh
+After follow the install process
