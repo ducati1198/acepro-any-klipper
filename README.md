@@ -86,6 +86,7 @@ You can force a hard refresh on your browser each time you update:
 Windows/Linux: Ctrl + F5 or Ctrl + Shift + R
 
 Mac: Cmd + Shift + R
+```
 
 The installer will:
 - Detect your Klipper directory.
