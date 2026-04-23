@@ -185,82 +185,43 @@ toolchange_load_length: 2000,1:2500
 
 ## 🔌 Integration with Your Macros
 
-We provide three simple hook macros that you can call from your own `PRINT_START`, `PRINT_END`, and `CANCEL_PRINT` macros. They are hidden from the UI (starting with `_`) but fully functional.
+We provide simple  macros that you can call from [gcode_macro MY_START_PRINT]
 
 | Macro | Purpose |
 |-------|---------|
-| `_ACE_PRO_START` | Load the first tool (smart skip if already loaded) |
-| `_ACE_PRO_END`   | Unload the current tool (cutter + retraction) |
-| `_ACE_PRO_CANCEL`| Unload the current tool (cutter + retraction) |
+MY_START_PRINT - Load frist filament and prepare print before start_print
 
-### Example for a Generic Klipper Printer
 
-**In your `PRINT_START` macro** (after homing and bed heating):
-
-```cfg
-_ACE_PRO_START TOOL=0 EXTRUDER_TEMP={EXTRUDER_TEMP}
-```
-
-**In your `PRINT_END` macro** (after park moves, before turning off heaters):
-
-```cfg
-_ACE_PRO_END
-```
-
-**In your `CANCEL_PRINT` macro** (before turning off heaters):
-
-```cfg
-_ACE_PRO_CANCEL
-```
-
-### Example for Simple AF Printers
-
-Add the following to the respective Simple AF hooks:
-
-- In `_SAF_START_PRINT_BEFORE_LINE_PURGE` (or wherever your start sequence is):
-  ```
-  _ACE_PRO_START TOOL=0 EXTRUDER_TEMP={EXTRUDER_TEMP}
-  ```
-- In `_SAF_END_PRINT_START`:
-  ```
-  _ACE_PRO_END
-  ```
-- In `_SAF_ON_CANCEL`:
-  ```
-  _ACE_PRO_CANCEL
-  ```
-
-> **Note:** The `_ACE_PRO_START` macro automatically checks if the requested tool is already loaded and physically present at the nozzle. If so, it skips the reload – saving time on print restarts.
+> **Note:** The `MY_START_PRINT` macro automatically checks if the requested tool is already loaded and physically present at the nozzle. If so, it skips the reload – saving time on print restarts.
 
 ---
 
 ## 🔌 Slicer Setup (OrcaSlicer)
 
-To make ACE Pro work with your prints, you need to call the hook macros from your slicer’s start and end G‑code.
+To make ACE Pro work with your prints, you need to call the  macros from your slicer’s Machine start G‑code.
 
-### Generic Klipper Printer
+### Generic Klipper Printer and Simple AF Printers
 
-**Machine Start G‑code**:
+You need to remove: START_PRINT
+Add: MY_START_PRINT TOOL={initial_tool 
+Add: SET_PRINT_STATS_INFO TOTAL_LAYER=[total_layer_count]
 
-```
-_ACE_PRO_START TOOL=0 EXTRUDER_TEMP=[nozzle_temperature_initial_layer]
-G28
-M190 S[bed_temperature_initial_layer]
-BED_MESH_CALIBRATE ADAPTIVE=1
-```
+E.G.: **Machine Start G‑code**:
 
-**Machine End G‑code**:
+M140 S0
+M104 S0
+MY_START_PRINT TOOL={initial_tool} BED_TEMP=[bed_temperature_initial_layer_single] EXTRUDER_TEMP=[nozzle_temperature_initial_layer]
+SET_PRINT_STATS_INFO TOTAL_LAYER=[total_layer_count]
 
-```
-_ACE_PRO_END
-```
+**Orca Slicer End G‑code** (still just `PRINT_END`).
 
-### Simple AF Printers
+To make ACE Pro work with your prints, you need to call the  macros from your slicer’s Layer change G-code.
 
-If you already have a `PRINT_START` macro that calls Simple AF hooks, just insert `_ACE_PRO_START` inside that macro as shown above. Then your slicer only needs to call `PRINT_START` with the usual parameters.
+Add: 
 
-**Orca Slicer End G‑code** (still just `PRINT_END` if your macro includes `_ACE_PRO_END`).
-
+;AFTER_LAYER_CHANGE
+SET_PRINT_STATS_INFO CURRENT_LAYER={layer_num + 1}
+M117 Layer {layer_num+1}/[total_layer_count] : {filament_settings_id[0]}
 ---
 
 ## 🧪 Usage & Commands
