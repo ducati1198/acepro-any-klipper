@@ -337,10 +337,6 @@ Lower `retract_speed` in `acepro_setting.cfg` (try 30 mm/s instead of 50). Thi
 
 Check sensor states with `ACE_DEBUG_SENSORS`. Ensure the toolhead sensor is clear and filament path is free. Use `ACE_CHANGE_TOOL TOOL=-1` to force an unload.
 
-### No tool loaded after print start
-
-Verify `_ACE_PRO_START` is called correctly and that ACE Pro is enabled (the virtual pin `ACE_Pro` should be 1). The macro prints console messages for debugging.
-
 ---
 
 ## 🙏 Credits & License
