@@ -224,6 +224,10 @@ def cmd_ACE_GET_STATUS(gcmd):
         instance_num = gcmd.get_int("INSTANCE", None)
         verbose = gcmd.get_int("VERBOSE", 0)
 
+        def build_status_request(ace_instance):
+            """Build one protocol-correct status request without leaking transport details here."""
+            return ace_instance.protocol.build_get_status_request()
+
         def format_verbose_status(result, inst_num, ace_instance=None):
             """Format all status information in a readable, grouped format."""
             lines = []
@@ -435,7 +439,7 @@ def cmd_ACE_GET_STATUS(gcmd):
                     msg = response.get("msg") if response else "No response"
                     gcmd.respond_info(f"Status query failed: {msg}")
 
-            ace.send_request({"method": "get_status"}, status_callback)
+            ace.send_request(build_status_request(ace), status_callback)
         else:
             if verbose:
                 gcmd.respond_info("=== ACE Status (All Instances - Verbose) ===\n")
@@ -466,7 +470,7 @@ def cmd_ACE_GET_STATUS(gcmd):
                         msg = response.get("msg") if response else "No response"
                         gcmd.respond_info(f"Instance {inst_num}: Status query failed: {msg}")
 
-                ace.send_request({"method": "get_status"}, status_callback)
+                ace.send_request(build_status_request(ace), status_callback)
 
             for_each_instance(query_instance)
 
@@ -749,10 +753,11 @@ def cmd_ACE_SET_SLOT(gcmd):
         }
         manager = ace_get_manager(ace.instance_num)
         manager._sync_inventory_to_persistent(ace.instance_num)
-        gcmd.respond_info(f"Slot {idx}: color={color}, material={material}, temp={temp}, custom_name={custom_name}")  # updated
+        gcmd.respond_info(
+            f"Slot {idx}: color={color}, material={material}, temp={temp}, custom_name={custom_name}"  # <-- updated
+        )
     except Exception as e:
         gcmd.respond_info(f"ACE_SET_SLOT error: {e}")
-
 
 def cmd_ACE_SAVE_INVENTORY(gcmd):
     """Save inventory to persistent storage."""
@@ -782,10 +787,6 @@ def cmd_ACE_START_DRYING(gcmd):
             if temperature <= 0 or temperature > ace.max_dryer_temperature:
                 raise gcmd.error(f"TEMP must be between 1 and {ace.max_dryer_temperature}°C")
 
-            ace._dryer_active = True
-            ace._dryer_temperature = temperature
-            ace._dryer_duration = duration
-
             def callback(response):
                 if response and response.get("code") == 0:
                     if not getattr(ace, "_dryer_start_logged", False):
@@ -795,17 +796,17 @@ def cmd_ACE_START_DRYING(gcmd):
                     msg = response.get("msg", "Unknown error") if response else ""
                     gcmd.respond_info(f"ACE[{instance_num}]: Dryer start failed: {msg}")
 
-            request = {"method": "drying", "params": {"temp": temperature, "duration": duration}}
-            ace.send_request(request, callback)
+            ace.start_drying(temperature, duration, callback)
         else:
+            if len(ACE_INSTANCES) > 1:
+                gcmd.respond_info(
+                    "ACE_START_DRYING: INSTANCE not provided - applying to all ACE instances"
+                )
+
             def start_dryer(inst_num, manager, ace):
                 if temperature <= 0 or temperature > ace.max_dryer_temperature:
                     gcmd.respond_info(f"ACE[{inst_num}]: Temp {temperature}°C out of range, skipping")
                     return
-
-                ace._dryer_active = True
-                ace._dryer_temperature = temperature
-                ace._dryer_duration = duration
 
                 def callback(response):
                     if response and response.get("code") == 0:
@@ -816,8 +817,7 @@ def cmd_ACE_START_DRYING(gcmd):
                         msg = response.get("msg", "Unknown error") if response else ""
                         gcmd.respond_info(f"ACE[{inst_num}]: Dryer start failed: {msg}")
 
-                request = {"method": "drying", "params": {"temp": temperature, "duration": duration}}
-                ace.send_request(request, callback)
+                ace.start_drying(temperature, duration, callback)
 
             for_each_instance(start_dryer)
 
@@ -833,10 +833,6 @@ def cmd_ACE_STOP_DRYING(gcmd):
         if instance_num is not None:
             ace = ace_get_instance(gcmd)
 
-            ace._dryer_active = False
-            ace._dryer_temperature = 0
-            ace._dryer_duration = 0
-
             def callback(response):
                 if response and response.get("code") == 0:
                     gcmd.respond_info(f"ACE[{instance_num}]: Dryer stopped")
@@ -845,14 +841,14 @@ def cmd_ACE_STOP_DRYING(gcmd):
                     msg = response.get("msg", "Unknown error") if response else ""
                     gcmd.respond_info(f"ACE[{instance_num}]: Dryer stop failed: {msg}")
 
-            request = {"method": "drying_stop"}
-            ace.send_request(request, callback)
+            ace.stop_drying(callback)
         else:
-            def stop_dryer(inst_num, manager, ace):
-                ace._dryer_active = False
-                ace._dryer_temperature = 0
-                ace._dryer_duration = 0
+            if len(ACE_INSTANCES) > 1:
+                gcmd.respond_info(
+                    "ACE_STOP_DRYING: INSTANCE not provided - applying to all ACE instances"
+                )
 
+            def stop_dryer(inst_num, manager, ace):
                 def callback(response):
                     if response and response.get("code") == 0:
                         gcmd.respond_info(f"ACE[{inst_num}]: Dryer stopped")
@@ -860,8 +856,7 @@ def cmd_ACE_STOP_DRYING(gcmd):
                         msg = response.get("msg", "Unknown error") if response else ""
                         gcmd.respond_info(f"ACE[{inst_num}]: Dryer stop failed: {msg}")
 
-                request = {"method": "drying_stop"}
-                ace.send_request(request, callback)
+                ace.stop_drying(callback)
 
             for_each_instance(stop_dryer)
 
@@ -1275,9 +1270,11 @@ def cmd_ACE_DEBUG(gcmd):
         raise gcmd.error(f"Invalid JSON in PARAMS: {params_str}")
 
     def callback(response):
-        gcmd.respond_info(f"Debug response: {json.dumps(response)}")
+        # Some protocol debug payloads contain raw bytes (e.g. raw_fields).
+        # Use default=str so debug output never crashes callback handling.
+        gcmd.respond_info(f"Debug response: {json.dumps(response, default=str)}")
 
-    request = {"method": method, "params": params}
+    request = ace.protocol.build_debug_request(method, params)
     ace.send_request(request, callback)
 
 
@@ -1320,14 +1317,12 @@ def cmd_ACE_HANDLE_PRINT_END(gcmd):
     if not do_cut:
         gcmd.respond_info("ACE: Print end - skipping unload (CUT_TIP=0), tool remains loaded")
 
-        # Disable feed assist on all instances except the one with the loaded tool
+        # Disable feed assist on all instances when print ends.
         tool_index = manager.state.get("ace_current_index", -1)
         if tool_index >= 0:
-            active_instance = get_instance_from_tool(tool_index)
-            for_each_instance(lambda inst_num, mgr, instance:
-                              instance.reset_feed_assist_state() if inst_num != active_instance else None)
+            for_each_instance(lambda inst_num, mgr, instance: instance._disable_feed_assist(instance._feed_assist_index))
             gcmd.respond_info(
-                f"ACE: Feed assist disabled on all instances except ACE[{active_instance}] (T{tool_index})")
+                "ACE: Feed assist disabled for all instances")
 
         # Refresh Orca lane_data snapshot after print end even when keeping filament loaded
         manager._sync_moonraker_lane_data(force=True, reason="print_end_skip_cut")
@@ -1348,7 +1343,7 @@ def cmd_ACE_HANDLE_PRINT_END(gcmd):
         if success:
             gcmd.respond_info(f"ACE: Tool T{tool_index} successfully unloaded")
             manager.state.set("ace_current_index", -1)
-            for_each_instance(lambda inst_num, mgr, instance: instance.reset_feed_assist_state())
+            for_each_instance(lambda inst_num, mgr, instance: instance._disable_feed_assist(instance._feed_assist_index))
         else:
             gcmd.respond_info(f"ACE: WARNING - Tool T{tool_index} unload may have failed")
 
@@ -2173,7 +2168,7 @@ ACE_COMMANDS = [
     ("ACE_SMART_LOAD", cmd_ACE_SMART_LOAD, "Load all non-empty slots to verification sensor."),
     ("_ACE_HANDLE_PRINT_END", cmd_ACE_HANDLE_PRINT_END, "Execute print end sequence (retract, cut, store)"),
     ("ACE_SET_SLOT", cmd_ACE_SET_SLOT,
-     "Set slot: T=<tool> or INSTANCE= INDEX=, COLOR=<name>|R,G,B MATERIAL= TEMP= or EMPTY=1 [FILAMENT_SETTINGS_ID]"),
+     "Set slot: T=<tool> or INSTANCE= INDEX=, COLOR=<name>|R,G,B MATERIAL= TEMP= or EMPTY=1"),
     ("ACE_SAVE_INVENTORY", cmd_ACE_SAVE_INVENTORY, "Save inventory. INSTANCE="),
     ("ACE_START_DRYING", cmd_ACE_START_DRYING, "Start dryer. [INSTANCE=] TEMP= [DURATION=240]"),
     ("ACE_STOP_DRYING", cmd_ACE_STOP_DRYING, "Stop dryer. [INSTANCE=]"),

@@ -189,6 +189,11 @@ class MoonrakerLaneSyncAdapter:
                     self.gcode.respond_info(msg)
                 except Exception:
                     pass
+            # Clean up malformed lane keys (e.g., from mocked tool offsets)
+            for key in list(existing.keys()):
+                if key.startswith("lane") and not self._is_lane_key(key):
+                    self._delete_item(key)
+                    existing.pop(key, None)
 
             for key, value in lanes.items():
                 if not force and existing.get(key) == value:
@@ -224,7 +229,7 @@ class MoonrakerLaneSyncAdapter:
 
             for local_slot in range(SLOTS_PER_ACE):
                 lane_index = tool_offset + local_slot
-                lane_key = f"lane{lane_index}"
+                lane_key = f"lane{lane_index + 1}"
 
                 inv = {}
                 if local_slot < len(instance.inventory):
@@ -237,16 +242,15 @@ class MoonrakerLaneSyncAdapter:
                 entry = {
                     "lane": str(lane_index),
                     "material": material if has_filament else "",
-                    "filament_name": material if has_filament else "",
-                    "filament_id": material if has_filament else "",
+                    "filament_name": material if has_filament else "",   # <-- ADD THIS LINE
+                    "filament_id": material if has_filament else "",     # <-- ADD THIS LINE
                     "color": self._rgb_to_hex(inv.get("color")) if has_filament else "",
                     "scan_time": "",
                     "td": "",
                 }
 
                 # ===== ADD CUSTOM PRESET NAME =====
-                # Store custom preset name if present (e.g., from ACE_SET_SLOT with FILAMENT_SETTINGS_ID)
-                custom_name = inv.get("custom_name") or inv.get("filament_settings_id")
+                custom_name = inv.get("custom_name") or inv.get("filament_settings_id")   # <-- ADD THIS BLOCK
                 if custom_name and has_filament:
                     entry["filament_settings_id"] = custom_name
                 # ================================
