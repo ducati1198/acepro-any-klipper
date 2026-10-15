@@ -116,9 +116,10 @@
               v-for="slot in slotsOf(i - 1)"
               :key="slot.index"
               cols="3"
-              class="d-flex flex-column align-center"
+              class="d-flex"
             >
-              <div class="ace-slot-label text--disabled">
+              <div class="ace-slot-tile">
+                <div class="ace-slot-label text--disabled">
                 SLOT {{ slot.index }}
               </div>
               <div
@@ -132,7 +133,7 @@
                   type="button"
                   class="ace-spool"
                   :class="spoolClasses(i - 1, slot)"
-                  :style="{ borderColor: slotEmpty(slot) ? undefined : slotColorCss(slot) }"
+                  :style="{ borderColor: spoolBorderCss(slot) }"
                   :disabled="!canSelectTool"
                   @click="selectTool(slotTool(slot))"
                 >
@@ -162,6 +163,7 @@
                 <template v-else>
                   &nbsp;
                 </template>
+                </div>
               </div>
             </v-col>
           </v-row>
@@ -193,7 +195,7 @@
             <template v-if="showRdmNode">
               <div
                 class="ace-path-line"
-                :class="{ active: rdmSensor === true }"
+                :class="{ active: filamentPastSplitter, busy: aceBusy }"
               >
                 <div class="ace-path-flow" />
               </div>
@@ -210,13 +212,13 @@
             <template v-if="showEncNode">
               <div
                 class="ace-path-line"
-                :class="{ active: rdmSensor === true }"
+                :class="{ active: filamentPastEncoder, busy: aceBusy }"
               >
                 <div class="ace-path-flow" />
               </div>
               <div
                 class="ace-path-node"
-                :class="{ active: encoderOk, jam: encoderJam }"
+                :class="{ active: filamentAtEncoder, jam: encoderJam }"
               >
                 <div
                   class="ace-enc-wheel"
@@ -232,7 +234,7 @@
             <template v-if="showNozzleNode">
               <div
                 class="ace-path-line"
-                :class="{ active: nozzleSensor === true }"
+                :class="{ active: filamentAtNozzle, busy: aceBusy }"
               >
                 <div class="ace-path-flow" />
               </div>
@@ -273,16 +275,24 @@
             cols="6"
             sm="4"
           >
-            <app-btn
-              block
-              small
-              :color="feedAssistOn ? 'primary' : undefined"
-              :outlined="!feedAssistOn"
-              :disabled="!canService"
+            <div
+              class="ace-fa-switch"
+              :class="{ 'ace-fa-enabled': feedAssistOn, 'ace-fa-disabled': !canService || currentTool < 0 }"
               @click="toggleFeedAssist(!feedAssistOn)"
             >
-              FEED ASSIST: {{ feedAssistOn ? 'ON' : 'OFF' }}
-            </app-btn>
+              <div
+                class="ace-fa-seg"
+                :class="{ active: !feedAssistOn }"
+              >
+                OFF
+              </div>
+              <div
+                class="ace-fa-seg"
+                :class="{ active: feedAssistOn }"
+              >
+                FEED ASSIST
+              </div>
+            </div>
           </v-col>
           <v-col
             cols="12"
@@ -340,7 +350,7 @@
               :key="idx"
               type="button"
               class="ace-swatch"
-              :style="{ background: c }"
+              :style="{ background: c, borderColor: swatchBorder(c) }"
               @click="pickSwatch(c)"
             />
           </div>
@@ -490,10 +500,10 @@ export default class AceCard extends Mixins(StateMixin, AceMixin) {
 
   readonly materials = ['PLA', 'PETG', 'ABS', 'ASA', 'PC', 'PA', 'TPU', 'Custom']
 
-  // Rainbow + white + black
+  // Black + white first, then rainbow
   readonly swatches = [
-    '#E53935', '#FB8C00', '#FDD835', '#43A047', '#00ACC1',
-    '#1E88E5', '#8E24AA', '#EC407A', '#F5F5F5', '#212121'
+    '#212121', '#F5F5F5', '#E53935', '#FB8C00', '#FDD835',
+    '#43A047', '#00ACC1', '#1E88E5', '#8E24AA', '#EC407A'
   ]
 
   get printState (): string {
@@ -572,16 +582,37 @@ export default class AceCard extends Mixins(StateMixin, AceMixin) {
     return this.showRdmNode || this.showEncNode || this.showNozzleNode
   }
 
-  // Jam: filament is at the nozzle but the encoder does not see it.
-  // The encoder node is green when filament is in the splitter and there
-  // is no jam — the encoder presence sensor alone is not trusted, because
-  // some configs report it stuck at "detected".
+  // Jam: filament is reported at the nozzle but the encoder does not see it.
   get encoderJam (): boolean {
     return this.feederSensor === false && this.nozzleSensor === true
   }
 
-  get encoderOk (): boolean {
-    return this.rdmSensor === true && !this.encoderJam
+  // Filament positions along the path (cumulative: downstream sensors
+  // imply the filament has passed the upstream ones).
+  get filamentAtEncoder (): boolean {
+    return this.feederSensor === true
+  }
+
+  get filamentAtNozzle (): boolean {
+    return this.nozzleSensor === true
+  }
+
+  get filamentPastSplitter (): boolean {
+    return this.rdmSensor === true || this.filamentAtEncoder || this.filamentAtNozzle
+  }
+
+  get filamentPastEncoder (): boolean {
+    return this.filamentAtEncoder || this.filamentAtNozzle
+  }
+
+  // ACE is busy with a load/unload action: instance status is known and
+  // not ready/idle. Unknown status = idle (lines stay solid, no errors).
+  get aceBusy (): boolean {
+    for (let i = 0; i < this.aceInstanceCount; i++) {
+      const s = String(this.aceInstance(i)?.status ?? '').toLowerCase()
+      if (s && !['ready', 'idle'].includes(s)) return true
+    }
+    return false
   }
 
   // Feed assist state: from the driver, local fallback until it reports
@@ -637,9 +668,35 @@ export default class AceCard extends Mixins(StateMixin, AceMixin) {
     return 'ace-status-ready'
   }
 
+  // Spool ring keeps the real filament color; dark colors additionally
+  // get a light outer ring (ace-spool-dark) so they stay visible on the
+  // dark slot tile.
+  spoolBorderCss (slot?: AceSlot): string | undefined {
+    if (this.slotEmpty(slot)) return undefined
+    return this.slotColorCss(slot)
+  }
+
+  slotDark (slot?: AceSlot): boolean {
+    const c = slot?.color
+    if (Array.isArray(c) && c.length >= 3) {
+      const lum = 0.299 * Number(c[0]) + 0.587 * Number(c[1]) + 0.114 * Number(c[2])
+      return lum < 60
+    }
+    return false
+  }
+
+  // Swatch border: dark swatches need a light border to stay visible.
+  swatchBorder (css: string): string {
+    const m = css.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i)
+    if (!m) return 'rgba(0, 0, 0, 0.35)'
+    const lum = 0.299 * parseInt(m[1], 16) + 0.587 * parseInt(m[2], 16) + 0.114 * parseInt(m[3], 16)
+    return lum < 80 ? '#9E9E9E' : 'rgba(0, 0, 0, 0.35)'
+  }
+
   spoolClasses (instanceIndex: number, slot: AceSlot): Record<string, boolean> {
     return {
       'ace-spool-empty': this.slotEmpty(slot),
+      'ace-spool-dark': !this.slotEmpty(slot) && this.slotDark(slot),
       'ace-spool-current': this.isCurrentTool(instanceIndex, slot.index),
       'ace-spool-printing': this.isCurrentTool(instanceIndex, slot.index) && this.printing
     }
@@ -664,7 +721,7 @@ export default class AceCard extends Mixins(StateMixin, AceMixin) {
   }
 
   toggleFeedAssist (value: boolean) {
-    if (this.currentTool < 0) return
+    if (!this.canService || this.currentTool < 0) return
     if (this.feedAssistSlot == null) this.faLocal = value
     this.send(value
       ? `ACE_ENABLE_FEED_ASSIST T=${this.currentTool}`
@@ -745,6 +802,17 @@ export default class AceCard extends Mixins(StateMixin, AceMixin) {
 }
 
 // --- Slots ---
+.ace-slot-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  padding: 6px 4px 8px;
+  background: #2c2c30;
+  border: 1px solid #454549;
+  border-radius: 10px;
+}
+
 .ace-slot-label {
   font-size: 0.75em;
   letter-spacing: 0.08em;
@@ -816,12 +884,21 @@ export default class AceCard extends Mixins(StateMixin, AceMixin) {
   box-shadow: 0 0 0 2px #ff9800, 0 0 10px rgba(255, 152, 0, 0.7);
 }
 
+// Dark filament colors (e.g. black): light outer ring for contrast
+.ace-spool-dark {
+  box-shadow: 0 0 0 2px #6e6e73;
+}
+
+.ace-spool-current.ace-spool-dark {
+  box-shadow: 0 0 0 2px #2196f3, 0 0 8px rgba(33, 150, 243, 0.6);
+}
+
 .ace-spool-edit {
   position: absolute;
-  right: -6px;
-  bottom: -4px;
-  width: 18px;
-  height: 18px;
+  right: -7px;
+  bottom: -5px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   border: 1px solid rgba(128, 128, 128, 0.4);
   background: #262629;
@@ -910,6 +987,57 @@ export default class AceCard extends Mixins(StateMixin, AceMixin) {
   font-weight: 600;
 }
 
+// --- Feed assist segmented switch ---
+.ace-fa-switch {
+  display: flex;
+  width: 100%;
+  height: 28px;
+  border: 1px solid #4a4a4f;
+  border-radius: 4px;
+  overflow: hidden;
+  cursor: pointer;
+
+  // Blue frame only while feed assist is on
+  &.ace-fa-enabled {
+    border-color: #2196f3;
+  }
+
+  &.ace-fa-disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+
+.ace-fa-seg {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #9e9e9e;
+  background: rgba(33, 150, 243, 0.08);
+  padding: 0 2px;
+  white-space: nowrap;
+  user-select: none;
+
+  &.active {
+    color: #ffffff;
+    font-weight: 700;
+  }
+
+  // OFF is the left segment: grey when active. FEED ASSIST is the right
+  // one: primary blue when active.
+  &:first-child.active {
+    background: #4a4a4f;
+  }
+
+  &:last-child.active {
+    background: #2196f3;
+  }
+}
+
 // --- Filament path ---
 .ace-path {
   display: flex;
@@ -953,15 +1081,15 @@ export default class AceCard extends Mixins(StateMixin, AceMixin) {
   white-space: nowrap;
 }
 
-// Encoder: static ring, turns red on jam (filament at the nozzle
-// but not at the encoder)
+// Encoder: static ring, green normally, red on jam (filament at the
+// nozzle but not at the encoder)
 .ace-enc-wheel {
   position: relative;
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  border: 2px solid rgba(128, 128, 128, 0.5);
-  background: rgba(128, 128, 128, 0.15);
+  border: 2px solid #4caf50;
+  background: rgba(76, 175, 80, 0.15);
   transition: border-color 0.3s ease, background 0.3s ease;
 
   &.jam {
@@ -979,7 +1107,7 @@ export default class AceCard extends Mixins(StateMixin, AceMixin) {
   height: 7px;
   margin-left: -1px;
   border-radius: 1px;
-  background: rgba(128, 128, 128, 0.7);
+  background: #4caf50;
 
   .jam & {
     background: #e53935;
@@ -1002,12 +1130,18 @@ export default class AceCard extends Mixins(StateMixin, AceMixin) {
   transform: translateX(-100%);
 }
 
+// Solid green while filament is present; the flowing animation only
+// runs while ACE is actually loading/unloading (aceBusy).
 .ace-path-line.active {
-  background: rgba(76, 175, 80, 0.35);
+  background: rgba(76, 175, 80, 0.55);
 
-  .ace-path-flow {
-    background: linear-gradient(90deg, transparent, #4caf50 50%, transparent);
-    animation: ace-flow 1.6s linear infinite;
+  &.busy {
+    background: rgba(76, 175, 80, 0.3);
+
+    .ace-path-flow {
+      background: linear-gradient(90deg, transparent, #4caf50 50%, transparent);
+      animation: ace-flow 1.6s linear infinite;
+    }
   }
 }
 
