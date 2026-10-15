@@ -195,7 +195,7 @@
             <template v-if="showRdmNode">
               <div
                 class="ace-path-line"
-                :class="{ active: filamentPastSplitter, busy: aceBusy }"
+                :class="{ active: rdmSensor === true || flowToSplitter, busy: flowToSplitter }"
               >
                 <div class="ace-path-flow" />
               </div>
@@ -212,7 +212,7 @@
             <template v-if="showEncNode">
               <div
                 class="ace-path-line"
-                :class="{ active: filamentPastEncoder, busy: aceBusy }"
+                :class="{ active: filamentPastEncoder || flowToEncoder, busy: flowToEncoder }"
               >
                 <div class="ace-path-flow" />
               </div>
@@ -222,7 +222,7 @@
               >
                 <div
                   class="ace-enc-wheel"
-                  :class="{ jam: encoderJam }"
+                  :class="{ active: filamentAtEncoder, jam: encoderJam }"
                 >
                   <div class="ace-enc-spoke" />
                 </div>
@@ -234,7 +234,7 @@
             <template v-if="showNozzleNode">
               <div
                 class="ace-path-line"
-                :class="{ active: filamentAtNozzle, busy: aceBusy }"
+                :class="{ active: filamentAtNozzle || flowToNozzle, busy: flowToNozzle }"
               >
                 <div class="ace-path-flow" />
               </div>
@@ -587,22 +587,41 @@ export default class AceCard extends Mixins(StateMixin, AceMixin) {
     return this.feederSensor === false && this.nozzleSensor === true
   }
 
-  // Filament positions along the path (cumulative: downstream sensors
-  // imply the filament has passed the upstream ones).
+  // Filament positions along the path. The encoder cannot see filament
+  // unless the splitter does (filament reaches the encoder only after the
+  // splitter): when the splitter sensor reports empty, the encoder node
+  // goes dark no matter what the encoder sensor itself says. When no
+  // splitter sensor exists, the encoder sensor speaks for itself. A jam
+  // (filament at the nozzle but not at the encoder) turns the encoder red.
   get filamentAtEncoder (): boolean {
-    return this.feederSensor === true
+    if (this.encoderJam) return false
+    if (this.rdmSensor === null) return this.feederSensor === true
+    return this.rdmSensor === true
   }
 
   get filamentAtNozzle (): boolean {
     return this.nozzleSensor === true
   }
 
-  get filamentPastSplitter (): boolean {
-    return this.rdmSensor === true || this.filamentAtEncoder || this.filamentAtNozzle
-  }
-
+  // Filament has passed the encoder region (encoder green or further).
   get filamentPastEncoder (): boolean {
     return this.filamentAtEncoder || this.filamentAtNozzle
+  }
+
+  // Segment flow animation while ACE is loading/unloading: the segment
+  // between the last sensor that sees filament and the next one flows.
+  // Works in both directions (load and unload) with the same rule.
+  get flowToSplitter (): boolean {
+    return this.aceBusy && this.pathInAce && this.rdmSensor !== true
+  }
+
+  get flowToEncoder (): boolean {
+    if (!this.aceBusy || this.filamentAtEncoder) return false
+    return this.rdmSensor === true || (this.rdmSensor === null && this.pathInAce)
+  }
+
+  get flowToNozzle (): boolean {
+    return this.aceBusy && this.filamentAtEncoder && this.nozzleSensor !== true
   }
 
   // ACE is busy with a load/unload action: instance status is known and
@@ -1081,16 +1100,22 @@ export default class AceCard extends Mixins(StateMixin, AceMixin) {
   white-space: nowrap;
 }
 
-// Encoder: static ring, green normally, red on jam (filament at the
-// nozzle but not at the encoder)
+// Encoder: grey when empty, green when filament reaches it (which
+// requires a full splitter), red on jam (filament at the nozzle but not
+// at the encoder)
 .ace-enc-wheel {
   position: relative;
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  border: 2px solid #4caf50;
-  background: rgba(76, 175, 80, 0.15);
+  border: 2px solid rgba(128, 128, 128, 0.5);
+  background: rgba(128, 128, 128, 0.15);
   transition: border-color 0.3s ease, background 0.3s ease;
+
+  &.active {
+    border-color: #4caf50;
+    background: rgba(76, 175, 80, 0.15);
+  }
 
   &.jam {
     border-color: #e53935;
@@ -1107,7 +1132,11 @@ export default class AceCard extends Mixins(StateMixin, AceMixin) {
   height: 7px;
   margin-left: -1px;
   border-radius: 1px;
-  background: #4caf50;
+  background: rgba(128, 128, 128, 0.7);
+
+  .active > & {
+    background: #4caf50;
+  }
 
   .jam & {
     background: #e53935;
