@@ -1,13 +1,18 @@
 # Fluidd ACE Pro panel
 
-Fluidd v1.37.7 with two additions for this driver:
+Fluidd v1.37.7 with an ACE Pro panel for this driver:
 
-- **ACE Pro card** on the dashboard: every unit and slot (colour, material, temperature, RFID),
-  load/unload, feed/retract, slot editing, dryer, endless spool and ACE on/off.
+- **ACE Pro card** on the dashboard in four layouts (cards, compact strip, spool rack, table): every unit
+  and slot (colour, material, temperature, RFID), load/unload, feed/retract, slot editing, tool-change
+  progress, dryer with material presets, endless spool (match mode and a takeover order per tool) and ACE on/off.
+- **ACE Pro page** (side menu, or `#/ace`) with health and counters, the endless spool order and cutter tests.
+- **Cutter wizard** to find `cut_full_x`, and **health and counters** (tool changes, cuts, purged filament).
 - **Spool picker at print start:** pressing Print (file browser) or Re-print shows "Choose ACE spools".
-  Each filament in the file gets its best loaded spool (same material, closest colour) and you can
-  change any of them. Fluidd then sends `ACE_SET_TOOL_MAP MAP=… FILE=…` and starts the print;
-  the map applies to that print only.
+  Each filament in the file gets the loaded spool with the closest colour (the filament type breaks ties);
+  you can change any of them, drag to swap, use the map view, save a mapping, or dry the spools first.
+  Fluidd then sends `ACE_SET_TOOL_MAP MAP=… FILE=…` and starts the print; the map applies to that print only.
+
+The counters and endless spool order need the driver and `config/acepro.cfg` from this repo.
 
 ## Install the ready-made build
 

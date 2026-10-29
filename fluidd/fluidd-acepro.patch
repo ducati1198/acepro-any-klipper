@@ -1,5 +1,3 @@
-# Fluidd v1.37.7 ACE Pro card + print-start spool picker
-# Apply on top of fluidd-core/fluidd v1.37.7:  git apply fluidd-acepro.patch
 diff --git a/src/App.vue b/src/App.vue
 index de67b82..7e0cb50 100644
 --- a/src/App.vue
@@ -30,12 +28,514 @@ index de67b82..7e0cb50 100644
    }
  })
  export default class App extends Mixins(StateMixin, FilesMixin, BrowserMixin) {
+diff --git a/src/components/layout/AppNavDrawer.vue b/src/components/layout/AppNavDrawer.vue
+index 669378b..307554a 100644
+--- a/src/components/layout/AppNavDrawer.vue
++++ b/src/components/layout/AppNavDrawer.vue
+@@ -60,6 +60,14 @@
+             {{ $t('app.general.title.jobs') }}
+           </app-nav-item>
+ 
++          <app-nav-item
++            v-if="supportsAce"
++            icon="$mmu"
++            to="ace"
++          >
++            ACE Pro
++          </app-nav-item>
++
+           <app-nav-item
+             v-if="supportsHistory"
+             icon="$history"
+@@ -161,6 +169,12 @@ export default class AppNavDrawer extends Mixins(StateMixin, BrowserMixin) {
+     return this.$typedGetters['server/componentSupport']('history')
+   }
+ 
++  get supportsAce (): boolean {
++    const ace = this.$typedState.printer.printer.ace
++
++    return ace != null && typeof ace === 'object' && 'ace_instances' in ace
++  }
++
+   get supportsTimelapse (): boolean {
+     return this.$typedGetters['server/componentSupport']('timelapse')
+   }
+diff --git a/src/components/widgets/acepro/AceCutterWizard.vue b/src/components/widgets/acepro/AceCutterWizard.vue
+new file mode 100644
+index 0000000..f0c992b
+--- /dev/null
++++ b/src/components/widgets/acepro/AceCutterWizard.vue
+@@ -0,0 +1,218 @@
++<template>
++  <app-dialog
++    v-model="open"
++    title="Cutter calibration"
++    width="520"
++    no-actions
++  >
++    <v-card-text>
++      <v-alert
++        v-if="!macrosReady"
++        dense
++        text
++        type="warning"
++        class="text-caption"
++      >
++        The calibration macros are not loaded. Add <code>[include cut_calibrate.cfg]</code> to
++        <code>printer.cfg</code> and restart Klipper.
++      </v-alert>
++      <v-alert
++        v-else-if="aceIsPrinting"
++        dense
++        text
++        type="info"
++        class="text-caption"
++      >
++        Calibration is locked while a print is running.
++      </v-alert>
++
++      <div class="text-body-2 mb-2">
++        Push the cutter lever a little at a time and watch it. Stop when the blade is fully closed.
++        Going past that point makes the X belt skip teeth.
++      </div>
++
++      <div class="ace-cutter rounded pa-3 mb-3">
++        <div class="d-flex align-center">
++          <div>
++            <div class="text-caption secondary--text">
++              Toolhead X
++            </div>
++            <div class="text-h5">
++              {{ currentX == null ? '--' : currentX.toFixed(2) }}
++            </div>
++          </div>
++          <v-spacer />
++          <div class="text-right text-caption">
++            <div>engage <b>{{ engageX == null ? '--' : engageX }}</b></div>
++            <div>limit <b>{{ fullX == null ? '--' : fullX }}</b></div>
++          </div>
++        </div>
++        <v-progress-linear
++          :value="progress"
++          height="8"
++          rounded
++          class="mt-2"
++          :color="progress > 90 ? 'error' : 'primary'"
++        />
++        <div class="d-flex text-caption secondary--text mt-1">
++          <span>lever untouched</span>
++          <v-spacer />
++          <span>cut_full_x</span>
++        </div>
++      </div>
++
++      <div class="d-flex flex-wrap ace-cutter-actions">
++        <app-btn
++          small
++          color="primary"
++          :disabled="!canRun"
++          @click="run('CUT_CAL_START')"
++        >
++          1. Start
++        </app-btn>
++        <app-btn
++          small
++          outlined
++          :disabled="!canRun"
++          @click="run('CUT_CAL_STEP')"
++        >
++          2. Push 0.5 mm
++        </app-btn>
++        <app-btn
++          small
++          outlined
++          :disabled="!canRun"
++          @click="run('CUT_CAL_STEP STEP=0.2')"
++        >
++          Push 0.2 mm
++        </app-btn>
++        <app-btn
++          small
++          color="warning"
++          :disabled="!canRun"
++          @click="run('CUT_CAL_END')"
++        >
++          3. Back off
++        </app-btn>
++      </div>
++
++      <v-divider class="my-3" />
++
++      <div class="text-subtitle-2 mb-1">
++        Note the positions
++      </div>
++      <div class="d-flex align-center flex-wrap">
++        <app-btn
++          x-small
++          outlined
++          class="mr-2"
++          :disabled="currentX == null"
++          @click="touchX = currentX"
++        >
++          Lever starts to move
++        </app-btn>
++        <span class="text-body-2 mr-4">{{ touchX == null ? '--' : touchX.toFixed(2) }}</span>
++        <app-btn
++          x-small
++          outlined
++          class="mr-2"
++          :disabled="currentX == null"
++          @click="bottomX = currentX"
++        >
++          Fully pressed
++        </app-btn>
++        <span class="text-body-2">{{ bottomX == null ? '--' : bottomX.toFixed(2) }}</span>
++      </div>
++
++      <div class="mt-3 d-flex align-center">
++        <app-btn
++          small
++          color="success"
++          :disabled="!canRun || bottomX == null"
++          @click="applyLimit"
++        >
++          Use {{ bottomX == null ? '…' : bottomX.toFixed(2) }} as cut_full_x
++        </app-btn>
++      </div>
++      <div class="text-caption secondary--text mt-1">
++        This applies until Klipper restarts. To keep it, set <code>variable_cut_full_x</code> in
++        <code>acepro_macros.cfg</code> to the same value.
++      </div>
++    </v-card-text>
++  </app-dialog>
++</template>
++
++<script lang="ts">
++import { Component, Mixins, VModel } from 'vue-property-decorator'
++import AceProMixin from './acepro'
++
++@Component
++export default class AceCutterWizard extends Mixins(AceProMixin) {
++  @VModel({ type: Boolean })
++  open!: boolean
++
++  touchX: number | null = null
++  bottomX: number | null = null
++
++  get vars (): Record<string, unknown> {
++    const macro = this.$typedState.printer.printer['gcode_macro _ACE_VARS']
++
++    return macro != null && typeof macro === 'object' ? macro as Record<string, unknown> : {}
++  }
++
++  get macrosReady (): boolean {
++    return 'gcode_macro CUT_CAL_START' in this.$typedState.printer.printer
++  }
++
++  num (value: unknown): number | null {
++    const parsed = Number(value)
++
++    return value == null || !Number.isFinite(parsed) ? null : parsed
++  }
++
++  get engageX (): number | null {
++    return this.num(this.vars.cut_engage_x)
++  }
++
++  get fullX (): number | null {
++    return this.num(this.vars.cut_full_x)
++  }
++
++  get currentX (): number | null {
++    return this.num(this.$typedState.printer.printer.toolhead?.position?.[0])
++  }
++
++  /** 0 at cut_engage_x, 100 at cut_full_x (X decreases while the lever is pushed). */
++  get progress (): number {
++    if (this.engageX == null || this.fullX == null || this.currentX == null) return 0
++
++    const span = this.engageX - this.fullX
++
++    return span <= 0 ? 0 : Math.max(0, Math.min(100, (this.engageX - this.currentX) / span * 100))
++  }
++
++  get canRun (): boolean {
++    return this.klippyReady && this.macrosReady && !this.aceIsPrinting
++  }
++
++  run (gcode: string) {
++    this.aceSendGcode(gcode)
++  }
++
++  applyLimit () {
++    if (this.bottomX == null) return
++
++    this.aceSendGcode(`SET_GCODE_VARIABLE MACRO=_ACE_VARS VARIABLE=cut_full_x VALUE=${this.bottomX.toFixed(2)}`)
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++.ace-cutter {
++  background-color: rgba(128, 128, 128, 0.12);
++}
++
++.ace-cutter-actions > * {
++  margin: 0 6px 6px 0;
++}
++</style>
+diff --git a/src/components/widgets/acepro/AceMappingView.vue b/src/components/widgets/acepro/AceMappingView.vue
+new file mode 100644
+index 0000000..badeaed
+--- /dev/null
++++ b/src/components/widgets/acepro/AceMappingView.vue
+@@ -0,0 +1,240 @@
++<template>
++  <div class="ace-map">
++    <svg
++      :viewBox="`0 0 560 ${height}`"
++      class="ace-map__svg"
++    >
++      <text
++        x="20"
++        y="16"
++        class="ace-map__head"
++      >
++        In the file
++      </text>
++      <text
++        x="540"
++        y="16"
++        text-anchor="end"
++        class="ace-map__head"
++      >
++        On the ACE
++      </text>
++
++      <!-- links first so the nodes sit on top -->
++      <path
++        v-for="row in rows"
++        :key="`map-link:${row.tool}`"
++        :d="curve(row)"
++        fill="none"
++        :stroke="row.color || '#888'"
++        stroke-width="4"
++        stroke-linecap="round"
++        :stroke-dasharray="warned[row.tool] ? '2 7' : undefined"
++        :opacity="selected === row.tool ? 1 : 0.85"
++      />
++
++      <g
++        v-for="(row, index) in rows"
++        :key="`map-src:${row.tool}`"
++        class="ace-map__node"
++        :class="{ 'ace-map__node--selected': selected === row.tool }"
++        role="button"
++        tabindex="0"
++        @click="selected = selected === row.tool ? null : row.tool"
++        @keydown.enter="selected = selected === row.tool ? null : row.tool"
++      >
++        <rect
++          x="8"
++          :y="rowY(index) - 18"
++          width="212"
++          height="36"
++          rx="8"
++          class="ace-map__box"
++        />
++        <circle
++          cx="30"
++          :cy="rowY(index)"
++          r="10"
++          :fill="row.color || '#888'"
++          stroke="rgba(128,128,128,0.8)"
++        />
++        <text
++          x="48"
++          :y="rowY(index) - 2"
++          class="ace-map__label"
++        >
++          T{{ row.tool }} · {{ row.type || 'Filament' }}
++        </text>
++        <text
++          x="48"
++          :y="rowY(index) + 12"
++          class="ace-map__small"
++        >
++          {{ row.name || row.color }}
++        </text>
++      </g>
++
++      <g
++        v-for="(slot, index) in slots"
++        :key="`map-dst:${slot.tool}`"
++        class="ace-map__node"
++        :class="{ 'ace-map__node--disabled': slot.disabled, 'ace-map__node--pickable': selected != null && !slot.disabled }"
++        role="button"
++        tabindex="0"
++        @click="pick(slot)"
++        @keydown.enter="pick(slot)"
++      >
++        <rect
++          x="340"
++          :y="slotY(index) - 14"
++          width="212"
++          height="28"
++          rx="7"
++          class="ace-map__box"
++        />
++        <circle
++          cx="540"
++          :cy="slotY(index)"
++          r="8"
++          :fill="slot.disabled ? 'transparent' : slot.color"
++          :stroke="slot.disabled ? '#888' : 'rgba(128,128,128,0.8)'"
++          :stroke-dasharray="slot.disabled ? '3 2' : undefined"
++        />
++        <text
++          x="350"
++          :y="slotY(index) + 4"
++          class="ace-map__label"
++        >
++          {{ slot.text }}
++        </text>
++      </g>
++    </svg>
++    <div class="text-caption secondary--text">
++      Click a filament, then click the spool that should print it. Dotted lines need your attention.
++    </div>
++  </div>
++</template>
++
++<script lang="ts">
++import { Component, Prop, Vue } from 'vue-property-decorator'
++
++interface MapRow {
++  tool: number;
++  color: string;
++  type: string;
++  name: string;
++}
++
++interface MapSlot {
++  tool: number;
++  text: string;
++  color: string;
++  disabled: boolean;
++}
++
++@Component
++export default class AceMappingView extends Vue {
++  @Prop({ type: Array, required: true })
++  readonly rows!: MapRow[]
++
++  @Prop({ type: Array, required: true })
++  readonly slots!: MapSlot[]
++
++  @Prop({ type: Object, required: true })
++  readonly mapping!: Record<number, number>
++
++  @Prop({ type: Object, default: () => ({}) })
++  readonly warned!: Record<number, boolean>
++
++  selected: number | null = null
++
++  get height (): number {
++    return Math.max(this.rows.length * 46, this.slots.length * 34) + 36
++  }
++
++  rowY (index: number): number {
++    const span = Math.max(this.rows.length * 46, 1)
++    const offset = (this.height - 36 - span) / 2
++
++    return 40 + offset + index * 46
++  }
++
++  slotY (index: number): number {
++    return 40 + index * 34
++  }
++
++  curve (row: MapRow): string {
++    const from = this.rows.findIndex(item => item.tool === row.tool)
++    const to = this.slots.findIndex(item => item.tool === this.mapping[row.tool])
++
++    if (from < 0 || to < 0) return ''
++
++    const y1 = this.rowY(from)
++    const y2 = this.slotY(to)
++
++    return `M220 ${y1} C 280 ${y1}, 280 ${y2}, 340 ${y2}`
++  }
++
++  pick (slot: MapSlot) {
++    if (this.selected == null || slot.disabled) return
++
++    this.$emit('change', this.selected, slot.tool)
++    this.selected = null
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++.ace-map__svg {
++  width: 100%;
++  display: block;
++}
++
++.ace-map__head {
++  font-size: 11px;
++  fill: currentColor;
++  opacity: 0.6;
++  text-transform: uppercase;
++}
++
++.ace-map__box {
++  fill: rgba(128, 128, 128, 0.12);
++  stroke: rgba(128, 128, 128, 0.35);
++}
++
++.ace-map__node {
++  cursor: pointer;
++  outline: none;
++}
++
++.ace-map__node:hover .ace-map__box {
++  fill: rgba(128, 128, 128, 0.22);
++}
++
++.ace-map__node--selected .ace-map__box {
++  stroke: var(--v-primary-base);
++  stroke-width: 2.5;
++}
++
++.ace-map__node--pickable .ace-map__box {
++  stroke: var(--v-primary-base);
++  stroke-dasharray: 4 3;
++}
++
++.ace-map__node--disabled {
++  cursor: default;
++  opacity: 0.45;
++}
++
++.ace-map__label {
++  font-size: 12px;
++  font-weight: bold;
++  fill: currentColor;
++}
++
++.ace-map__small {
++  font-size: 10px;
++  fill: currentColor;
++  opacity: 0.65;
++}
++</style>
 diff --git a/src/components/widgets/acepro/AcePrintStartDialog.vue b/src/components/widgets/acepro/AcePrintStartDialog.vue
 new file mode 100644
-index 0000000..0dc1ab4
+index 0000000..2494b18
 --- /dev/null
 +++ b/src/components/widgets/acepro/AcePrintStartDialog.vue
-@@ -0,0 +1,461 @@
+@@ -0,0 +1,826 @@
 +<template>
 +  <app-dialog
 +    v-model="open"
@@ -63,6 +563,123 @@ index 0000000..0dc1ab4
 +      </div>
 +    </v-card-text>
 +
++    <div
++      v-if="metadataLoaded"
++      class="d-flex align-center flex-wrap px-4 pb-2"
++    >
++      <v-btn-toggle
++        v-model="view"
++        mandatory
++        dense
++        class="mr-2"
++      >
++        <v-btn
++          value="list"
++          small
++        >
++          List
++        </v-btn>
++        <v-btn
++          value="map"
++          small
++        >
++          Map
++        </v-btn>
++      </v-btn-toggle>
++
++      <v-menu
++        offset-y
++        :close-on-content-click="false"
++      >
++        <template #activator="{ on, attrs }">
++          <app-btn
++            x-small
++            outlined
++            class="mr-2"
++            v-bind="attrs"
++            v-on="on"
++          >
++            Saved mappings
++            <v-icon
++              x-small
++              right
++            >
++              {{ icons.chevron }}
++            </v-icon>
++          </app-btn>
++        </template>
++        <v-list
++          dense
++          min-width="260"
++        >
++          <v-list-item
++            v-for="preset in presets"
++            :key="`map-preset:${preset.name}`"
++            @click="applyPreset(preset)"
++          >
++            <v-list-item-title>{{ preset.name }}</v-list-item-title>
++            <v-list-item-action class="my-0">
++              <v-btn
++                icon
++                x-small
++                title="Delete"
++                @click.stop="deletePreset(preset)"
++              >
++                <v-icon x-small>
++                  $close
++                </v-icon>
++              </v-btn>
++            </v-list-item-action>
++          </v-list-item>
++          <v-list-item v-if="presets.length === 0">
++            <v-list-item-title class="secondary--text text-caption">
++              Nothing saved yet
++            </v-list-item-title>
++          </v-list-item>
++          <v-divider />
++          <v-list-item class="py-1">
++            <v-text-field
++              v-model="presetName"
++              label="Save this mapping as"
++              dense
++              hide-details
++              @keydown.enter.prevent="savePreset"
++            />
++            <v-btn
++              icon
++              small
++              :disabled="!presetName.trim()"
++              class="ml-1"
++              @click="savePreset"
++            >
++              <v-icon small>
++                {{ icons.save }}
++              </v-icon>
++            </v-btn>
++          </v-list-item>
++        </v-list>
++      </v-menu>
++
++      <app-btn
++        x-small
++        text
++        title="Pick the best spool for every filament again"
++        @click="autoMatch"
++      >
++        Auto-match
++      </app-btn>
++      <v-chip
++        v-if="restored"
++        x-small
++        label
++        color="primary"
++        outlined
++        class="ml-2"
++      >
++        Last choice for this file
++      </v-chip>
++    </div>
++
 +    <v-card-text
 +      v-if="!metadataLoaded"
 +      class="text-center py-6"
@@ -77,11 +694,34 @@ index 0000000..0dc1ab4
 +
 +    <template v-else>
 +      <v-divider />
++      <ace-mapping-view
++        v-if="view === 'map'"
++        :rows="rows"
++        :slots="slotItems"
++        :mapping="mapping"
++        :warned="warned"
++        class="px-4 py-2"
++        @change="setMapping"
++      />
 +      <div
-+        v-for="row in rows"
++        v-for="row in view === 'list' ? rows : []"
 +        :key="`ace-map:${row.tool}`"
 +        class="d-flex align-center px-4 py-2 ace-map-row"
++        :class="{ 'ace-map-row--over': dragOver === row.tool }"
++        draggable="true"
++        @dragstart="dragFrom = row.tool"
++        @dragend="dragFrom = null; dragOver = null"
++        @dragover.prevent="dragOver = row.tool"
++        @dragleave="dragOver = null"
++        @drop.prevent="dropOn(row.tool)"
 +      >
++        <v-icon
++          small
++          class="mr-1 ace-drag"
++          title="Drag onto another row to swap the spools"
++        >
++          {{ icons.drag }}
++        </v-icon>
 +        <div class="ace-map-source d-flex align-center">
 +          <div
 +            class="ace-dot mr-2"
@@ -142,9 +782,35 @@ index 0000000..0dc1ab4
 +            :key="`warn:${row.tool}:${warning}`"
 +            class="text-caption warning--text mt-1"
 +          >
++            <v-icon
++              x-small
++              color="warning"
++            >
++              {{ icons.alert }}
++            </v-icon>
 +            {{ warning }}
 +          </div>
 +        </div>
++      </div>
++
++      <div
++        v-if="warningCount > 0 || purgeText"
++        class="px-4 py-2 text-caption ace-summary"
++      >
++        <span
++          v-if="warningCount > 0"
++          class="warning--text mr-3"
++        >
++          <v-icon
++            x-small
++            color="warning"
++          >{{ icons.alert }}</v-icon>
++          {{ warningCount }} {{ warningCount === 1 ? 'thing needs' : 'things need' }} a look
++        </span>
++        <span
++          v-if="purgeText"
++          class="secondary--text"
++        >{{ purgeText }}</span>
 +      </div>
 +
 +      <v-alert
@@ -165,6 +831,14 @@ index 0000000..0dc1ab4
 +        @click="open = false"
 +      >
 +        Cancel
++      </app-btn>
++      <app-btn
++        text
++        :disabled="!metadataLoaded || dryPlan.length === 0"
++        title="Dry the ACE units that hold these spools, then print when they are done"
++        @click="dryFirst"
++      >
++        Dry spools first…
 +      </app-btn>
 +      <v-spacer />
 +      <app-btn
@@ -198,6 +872,18 @@ index 0000000..0dc1ab4
 +import type { AppFile, AppFileWithMeta } from '@/store/files/types'
 +import type { AceSlotState } from './types'
 +import { acePrintStartState } from './printStartState'
++import AceMappingView from './AceMappingView.vue'
++import {
++  dryPresetFor,
++  formatMinutes,
++  loadFileMapping,
++  loadMapPresets,
++  saveFileMapping,
++  saveMapPresets,
++  type AceDryPreset,
++  type AceSavedMapping
++} from './aceUi'
++import { mdiAlertOutline, mdiChevronDown, mdiContentSave, mdiDragVertical } from '@mdi/js'
 +
 +interface SourceRow {
 +  tool: number;
@@ -212,6 +898,8 @@ index 0000000..0dc1ab4
 +  text: string;
 +  color: string;
 +  material: string;
++  /** Filament type reported by the unit (PLA, PETG…), not the preset name. */
++  type: string;
 +  disabled: boolean;
 +  slot: AceSlotState;
 +}
@@ -246,10 +934,25 @@ index 0000000..0dc1ab4
 +  return Math.sqrt((2 + rMean / 256) * dr * dr + 4 * dg * dg + (2 + (255 - rMean) / 256) * db * db)
 +}
 +
-+@Component
++@Component({
++  components: { AceMappingView }
++})
 +export default class AcePrintStartDialog extends Mixins(AceProMixin, FilesMixin) {
 +  mapping: Record<number, number> = {}
 +  busy = false
++  view: 'list' | 'map' = 'list'
++  presets: AceSavedMapping[] = []
++  presetName = ''
++  restored = false
++  dragFrom: number | null = null
++  dragOver: number | null = null
++
++  readonly icons = {
++    alert: mdiAlertOutline,
++    chevron: mdiChevronDown,
++    save: mdiContentSave,
++    drag: mdiDragVertical
++  }
 +
 +  get open (): boolean {
 +    return acePrintStartState.show
@@ -340,6 +1043,7 @@ index 0000000..0dc1ab4
 +        text: `T${slot.tool} · ${empty ? 'empty' : material}${slot.temp && !empty ? ` · ${slot.temp}°C` : ''}${where}`,
 +        color: this.aceSlotColor(slot),
 +        material,
++        type: empty ? '' : (slot.material || material),
 +        disabled: empty,
 +        slot
 +      }
@@ -358,10 +1062,16 @@ index 0000000..0dc1ab4
 +    return this.allSlots.find(slot => slot.tool === tool)
 +  }
 +
++  /**
++   * Lower is better. Colour decides first (distance in steps of 12, so
++   * near-identical colours count as a tie); the filament type only breaks
++   * that tie. The raw distance is a last tiebreaker.
++   */
 +  score (row: SourceRow, slot: SlotItem): number {
-+    const materialMatch = !row.type || normalizeMaterial(row.type) === normalizeMaterial(slot.material)
++    const typeMatch = !row.type || normalizeMaterial(row.type) === normalizeMaterial(slot.type)
++    const distance = row.color ? colorDistance(row.color, slot.color) : 0
 +
-+    return (materialMatch ? 0 : 1000) + (row.color ? colorDistance(row.color, slot.color) : 0)
++    return Math.floor(distance / 12) * 10 + (typeMatch ? 0 : 5) + distance / 1000
 +  }
 +
 +  autoMatch () {
@@ -371,8 +1081,8 @@ index 0000000..0dc1ab4
 +    for (const row of this.rows) {
 +      const candidates = [...this.readySlots]
 +        .sort((a, b) =>
-+          (this.score(row, a) + (used.has(a.tool) ? 500 : 0) + (a.tool === row.tool ? -1 : 0)) -
-+          (this.score(row, b) + (used.has(b.tool) ? 500 : 0) + (b.tool === row.tool ? -1 : 0))
++          (this.score(row, a) + (used.has(a.tool) ? 1000 : 0) + (a.tool === row.tool ? -1 : 0)) -
++          (this.score(row, b) + (used.has(b.tool) ? 1000 : 0) + (b.tool === row.tool ? -1 : 0))
 +        )
 +
 +      const best = candidates[0]?.tool ?? row.tool
@@ -386,6 +1096,133 @@ index 0000000..0dc1ab4
 +
 +  setMapping (tool: number, target: number) {
 +    this.mapping = { ...this.mapping, [tool]: target }
++    this.restored = false
++  }
++
++  /** Swap the spools of two rows. */
++  dropOn (tool: number) {
++    const from = this.dragFrom
++
++    this.dragFrom = null
++    this.dragOver = null
++
++    if (from == null || from === tool) return
++
++    this.mapping = { ...this.mapping, [from]: this.mapping[tool], [tool]: this.mapping[from] }
++    this.restored = false
++  }
++
++  get warned (): Record<number, boolean> {
++    return Object.fromEntries(this.rows.map(row => [row.tool, this.rowWarnings(row).length > 0]))
++  }
++
++  get warningCount (): number {
++    return this.rows.reduce((total, row) => total + this.rowWarnings(row).length, 0)
++  }
++
++  /** The ace section of the Klipper config, when Klipper reports it. */
++  get purgePerChange (): number {
++    const settings = this.$typedState.printer.printer.configfile?.settings?.ace
++    const length = Number(settings?.default_color_change_purge_length)
++    const multiplier = Number(settings?.purge_multiplier ?? 1)
++
++    return Number.isFinite(length) && length > 0 ? length * (Number.isFinite(multiplier) ? multiplier : 1) : 0
++  }
++
++  get purgeText (): string {
++    if (this.purgePerChange <= 0 || this.rows.length < 2) return ''
++
++    const grams = Math.round(this.purgePerChange * 0.003 * 100) / 100
++
++    return `Each tool change purges about ${Math.round(this.purgePerChange)} mm of filament (≈ ${grams} g).`
++  }
++
++  isValidMapping (map: Record<number, number>): boolean {
++    return this.rows.every(row => {
++      const target = map[row.tool]
++
++      return target != null && this.readySlots.some(slot => slot.tool === target)
++    })
++  }
++
++  applyPreset (preset: AceSavedMapping) {
++    const merged = { ...this.mapping }
++
++    for (const row of this.rows) {
++      const target = preset.map[row.tool]
++
++      if (target != null && this.readySlots.some(slot => slot.tool === target)) {
++        merged[row.tool] = target
++      }
++    }
++
++    this.mapping = merged
++    this.restored = false
++  }
++
++  savePreset () {
++    const name = this.presetName.trim()
++
++    if (!name) return
++
++    this.presets = [
++      ...this.presets.filter(preset => preset.name !== name),
++      { name, map: { ...this.mapping } }
++    ]
++    saveMapPresets(this.presets)
++    this.presetName = ''
++  }
++
++  deletePreset (preset: AceSavedMapping) {
++    this.presets = this.presets.filter(item => item.name !== preset.name)
++    saveMapPresets(this.presets)
++  }
++
++  /** One drying job per ACE unit that holds a spool this file will use. */
++  get dryPlan (): Array<{ unit: number, preset: AceDryPreset, tools: number[] }> {
++    const plan = new Map<number, { preset: AceDryPreset, tools: number[] }>()
++
++    for (const row of this.rows) {
++      const slot = this.slotFor(this.mapping[row.tool])
++
++      if (!slot || slot.disabled) continue
++
++      const preset = dryPresetFor(slot.type)
++      const unit = Math.floor(slot.tool / 4)
++
++      if (!preset) continue
++
++      const current = plan.get(unit)
++
++      if (!current) {
++        plan.set(unit, { preset, tools: [slot.tool] })
++      } else {
++        current.tools.push(slot.tool)
++        // the gentlest temperature protects every spool in the unit
++        if (preset.temp < current.preset.temp) current.preset = preset
++      }
++    }
++
++    return [...plan.entries()].map(([unit, value]) => ({ unit, ...value }))
++  }
++
++  async dryFirst () {
++    const lines = this.dryPlan
++      .map(item => `ACE ${item.unit + 1}: ${item.preset.temp}°C for ${formatMinutes(item.preset.minutes)} (${item.tools.map(t => `T${t}`).join(', ')})`)
++      .join('\n')
++
++    const result = await this.$confirm(
++      `Start drying now?\n\n${lines}\n\nThe print does not start. Press Print again when the dryers are done.`,
++      { title: 'Dry spools first', color: 'card-heading', icon: '$error' }
++    )
++
++    if (!result) return
++
++    for (const item of this.dryPlan) {
++      this.aceSendGcode(`ACE_START_DRYING INSTANCE=${item.unit} TEMP=${item.preset.temp} DURATION=${item.preset.minutes}`)
++    }
++
++    this.open = false
 +  }
 +
 +  rowWarnings (row: SourceRow): string[] {
@@ -398,8 +1235,8 @@ index 0000000..0dc1ab4
 +      return warnings
 +    }
 +
-+    if (row.type && normalizeMaterial(row.type) !== normalizeMaterial(slot.material)) {
-+      warnings.push(`Sliced for ${row.type}, spool is ${slot.material || 'unknown'}.`)
++    if (row.type && normalizeMaterial(row.type) !== normalizeMaterial(slot.type)) {
++      warnings.push(`Sliced for ${row.type}, spool is ${slot.type || 'unknown'}.`)
 +    }
 +
 +    if (row.color && colorDistance(row.color, slot.color) > 250) {
@@ -433,6 +1270,8 @@ index 0000000..0dc1ab4
 +      const gcode = `ACE_SET_TOOL_MAP MAP=${useMapping ? this.mapString : ''} FILE=${encodeGcodeParamValue(this.filename)}`
 +
 +      this.addConsoleEntry(gcode)
++      if (useMapping) saveFileMapping(this.filename, this.mapping)
++
 +      await SocketActions.printerGcodeScript(gcode)
 +      await SocketActions.printerPrintStart(this.filename)
 +
@@ -446,25 +1285,39 @@ index 0000000..0dc1ab4
 +    }
 +  }
 +
++  initialMapping () {
++    const remembered = this.filename ? loadFileMapping(this.filename) : undefined
++
++    if (remembered && this.isValidMapping(remembered)) {
++      this.mapping = { ...remembered }
++      this.restored = true
++    } else {
++      this.autoMatch()
++    }
++  }
++
 +  @Watch('open')
 +  onOpen (value: boolean) {
 +    if (!value) return
 +
 +    this.mapping = {}
++    this.restored = false
++    this.view = 'list'
++    this.presets = loadMapPresets()
 +
 +    if (this.filename && !this.metadataLoaded) {
 +      SocketActions.serverFilesMetadata(this.filename)
 +    }
 +
 +    if (this.metadataLoaded) {
-+      this.autoMatch()
++      this.initialMapping()
 +    }
 +  }
 +
 +  @Watch('metadataLoaded')
 +  onMetadataLoaded (value: boolean) {
 +    if (value && this.open && Object.keys(this.mapping).length === 0) {
-+      this.autoMatch()
++      this.initialMapping()
 +    }
 +  }
 +}
@@ -476,6 +1329,18 @@ index 0000000..0dc1ab4
 +}
 +
 +.ace-map-row + .ace-map-row {
++  border-top: thin solid rgba(128, 128, 128, 0.2);
++}
++
++.ace-map-row--over {
++  background-color: rgba(128, 128, 128, 0.18);
++}
++
++.ace-drag {
++  cursor: grab;
++}
++
++.ace-summary {
 +  border-top: thin solid rgba(128, 128, 128, 0.2);
 +}
 +
@@ -499,10 +1364,10 @@ index 0000000..0dc1ab4
 +</style>
 diff --git a/src/components/widgets/acepro/AceProCard.vue b/src/components/widgets/acepro/AceProCard.vue
 new file mode 100644
-index 0000000..85bca3c
+index 0000000..b62297a
 --- /dev/null
 +++ b/src/components/widgets/acepro/AceProCard.vue
-@@ -0,0 +1,224 @@
+@@ -0,0 +1,307 @@
 +<template>
 +  <collapsable-card
 +    title="ACE Pro"
@@ -511,6 +1376,27 @@ index 0000000..85bca3c
 +    layout-path="dashboard.ace-pro-card"
 +  >
 +    <template #menu>
++      <v-btn-toggle
++        :value="layout"
++        mandatory
++        dense
++        group
++        class="mr-1 ace-layout-toggle"
++        @change="setAceLayout"
++      >
++        <v-btn
++          v-for="item in layouts"
++          :key="`layout:${item.id}`"
++          :value="item.id"
++          :title="item.title"
++          small
++          icon
++        >
++          <v-icon small>
++            {{ item.icon }}
++          </v-icon>
++        </v-btn>
++      </v-btn-toggle>
 +      <app-btn
 +        icon
 +        small
@@ -619,14 +1505,32 @@ index 0000000..85bca3c
 +        </app-btn>
 +      </div>
 +
-+      <ace-pro-unit
-+        v-for="unit in aceUnits"
-+        :key="`ace-unit:${unit.index}`"
-+        :unit="unit"
-+        :show-title="aceUnits.length > 1"
-+        class="mt-3"
-+        @slot-click="openSlot(unit.index, $event)"
-+      />
++      <ace-pro-progress class="mt-3" />
++
++      <div class="mt-3">
++        <template v-if="layout === 'grid'">
++          <ace-pro-unit
++            v-for="unit in aceUnits"
++            :key="`ace-unit:${unit.index}`"
++            :unit="unit"
++            :show-title="aceUnits.length > 1"
++            class="mb-3"
++            @slot-click="openSlot(unit.index, $event)"
++          />
++        </template>
++        <ace-pro-strip
++          v-else-if="layout === 'strip'"
++          @slot-click="openSlotEntry"
++        />
++        <ace-pro-rack
++          v-else-if="layout === 'rack'"
++          @slot-click="openSlotEntry"
++        />
++        <ace-pro-table
++          v-else
++          @slot-click="openSlotEntry"
++        />
++      </div>
 +    </v-card-text>
 +
 +    <ace-pro-slot-dialog
@@ -634,6 +1538,14 @@ index 0000000..85bca3c
 +      v-model="dialog.open"
 +      :unit-index="dialog.unit"
 +      :slot-index="dialog.slot"
++    />
++    <ace-cutter-wizard
++      v-if="aceUi.cutterWizard"
++      v-model="aceUi.cutterWizard"
++    />
++    <ace-pro-health-dialog
++      v-if="aceUi.health"
++      v-model="aceUi.health"
 +    />
 +  </collapsable-card>
 +</template>
@@ -644,6 +1556,14 @@ index 0000000..85bca3c
 +import AceProUnit from './AceProUnit.vue'
 +import AceProSlotDialog from './AceProSlotDialog.vue'
 +import AceProSettingsMenu from './AceProSettingsMenu.vue'
++import AceProStrip from './AceProStrip.vue'
++import AceProRack from './AceProRack.vue'
++import AceProTable from './AceProTable.vue'
++import AceProProgress from './AceProProgress.vue'
++import AceCutterWizard from './AceCutterWizard.vue'
++import AceProHealthDialog from './AceProHealthDialog.vue'
++import { mdiDotsHorizontal, mdiServer, mdiTable, mdiViewGrid } from '@mdi/js'
++import { aceUi, setAceLayout, type AceLayout } from './aceUi'
 +
 +const POSITION_LABELS: Record<string, string> = {
 +  bowden: 'in bowden (unloaded)',
@@ -656,7 +1576,13 @@ index 0000000..85bca3c
 +  components: {
 +    AceProUnit,
 +    AceProSlotDialog,
-+    AceProSettingsMenu
++    AceProSettingsMenu,
++    AceProStrip,
++    AceProRack,
++    AceProTable,
++    AceProProgress,
++    AceCutterWizard,
++    AceProHealthDialog
 +  }
 +})
 +export default class AceProCard extends Mixins(AceProMixin) {
@@ -664,6 +1590,20 @@ index 0000000..85bca3c
 +    open: false,
 +    unit: 0,
 +    slot: 0
++  }
++
++  readonly aceUi = aceUi
++  readonly setAceLayout = setAceLayout
++
++  readonly layouts: Array<{ id: AceLayout, title: string, icon: string }> = [
++    { id: 'grid', title: 'Cards', icon: mdiViewGrid },
++    { id: 'strip', title: 'Compact strip', icon: mdiDotsHorizontal },
++    { id: 'rack', title: 'Spool rack', icon: mdiServer },
++    { id: 'table', title: 'Table', icon: mdiTable }
++  ]
++
++  get layout (): AceLayout {
++    return aceUi.layout
 +  }
 +
 +  get positionLabel (): string {
@@ -699,6 +1639,10 @@ index 0000000..85bca3c
 +    this.dialog = { open: true, unit, slot }
 +  }
 +
++  openSlotEntry (entry: { unit: number, slot: number }) {
++    this.openSlot(entry.unit, entry.slot)
++  }
++
 +  refresh () {
 +    this.aceSendGcode('ACE_QUERY_SLOTS')
 +  }
@@ -726,13 +1670,855 @@ index 0000000..85bca3c
 +.ace-status-row :deep(.v-chip) {
 +  text-transform: none;
 +}
++
++.ace-layout-toggle {
++  background: transparent !important;
++}
++</style>
+diff --git a/src/components/widgets/acepro/AceProDryer.vue b/src/components/widgets/acepro/AceProDryer.vue
+new file mode 100644
+index 0000000..b9c1d58
+--- /dev/null
++++ b/src/components/widgets/acepro/AceProDryer.vue
+@@ -0,0 +1,212 @@
++<template>
++  <div class="d-flex align-center flex-wrap ace-dryer">
++    <v-icon
++      small
++      class="mr-1"
++      :color="drying ? 'orange' : undefined"
++    >
++      $fan
++    </v-icon>
++    <span
++      v-if="!compact"
++      class="text-body-2 mr-2"
++    >Dryer</span>
++    <v-chip
++      x-small
++      label
++      :color="drying ? 'orange' : undefined"
++      :class="{ 'ace-pulse': drying }"
++      class="mr-2"
++    >
++      {{ drying ? `${dryer.target_temp || '?'}°C · ${remainingLabel} left` : 'Idle' }}
++    </v-chip>
++    <v-spacer />
++
++    <template v-if="!drying">
++      <v-menu
++        offset-y
++        left
++      >
++        <template #activator="{ on, attrs }">
++          <app-btn
++            x-small
++            outlined
++            class="mr-1"
++            :disabled="!canUse"
++            v-bind="attrs"
++            v-on="on"
++          >
++            Presets
++            <v-icon
++              x-small
++              right
++            >
++              {{ icons.chevron }}
++            </v-icon>
++          </app-btn>
++        </template>
++        <v-list dense>
++          <v-list-item
++            v-for="preset in presets"
++            :key="`dry-preset:${preset.id}`"
++            @click="applyPreset(preset)"
++          >
++            <v-list-item-title>
++              {{ preset.label }}
++              <span class="secondary--text text-caption ml-1">
++                {{ preset.temp }}°C · {{ formatMinutes(preset.minutes) }}
++              </span>
++              <v-chip
++                v-if="suggested && suggested.id === preset.id"
++                x-small
++                label
++                color="primary"
++                class="ml-1"
++              >
++                for this unit
++              </v-chip>
++            </v-list-item-title>
++          </v-list-item>
++        </v-list>
++      </v-menu>
++
++      <v-select
++        v-model="dryTemp"
++        :items="tempOptions"
++        suffix="°C"
++        dense
++        outlined
++        hide-details
++        class="ace-compact-select mr-1"
++      />
++      <v-select
++        v-model="dryDuration"
++        :items="durationOptions"
++        dense
++        outlined
++        hide-details
++        class="ace-compact-select mr-1"
++      />
++    </template>
++
++    <app-btn
++      x-small
++      :color="drying ? 'error' : 'primary'"
++      :disabled="!canUse"
++      @click="toggleDryer"
++    >
++      {{ drying ? 'Stop' : 'Dry' }}
++    </app-btn>
++  </div>
++</template>
++
++<script lang="ts">
++import { Component, Mixins, Prop } from 'vue-property-decorator'
++import { mdiChevronDown } from '@mdi/js'
++import AceProMixin from './acepro'
++import { ACE_DRY_PRESETS, dryPresetFor, formatMinutes, type AceDryPreset } from './aceUi'
++import type { AceDryerState, AceUnit } from './types'
++
++@Component
++export default class AceProDryer extends Mixins(AceProMixin) {
++  @Prop({ type: Object, required: true })
++  readonly unit!: AceUnit
++
++  @Prop({ type: Boolean })
++  readonly compact?: boolean
++
++  dryTemp = 50
++  dryDuration = 240
++
++  readonly icons = { chevron: mdiChevronDown }
++  readonly presets = ACE_DRY_PRESETS
++  readonly formatMinutes = formatMinutes
++  readonly tempOptions = [35, 40, 45, 50, 55, 60, 65]
++
++  readonly durationOptions = [30, 60, 120, 180, 240, 360, 480, 720]
++    .map(value => ({ value, text: value < 60 ? `${value} min` : `${value / 60} h` }))
++
++  get dryer (): AceDryerState {
++    return this.aceUnitDryer(this.unit)
++  }
++
++  get drying (): boolean {
++    return this.aceIsDrying(this.dryer)
++  }
++
++  get canUse (): boolean {
++    return this.klippyReady && this.aceUnitConnected(this.unit)
++  }
++
++  /** The gentlest preset that is safe for every spool in this unit. */
++  get suggested (): AceDryPreset | undefined {
++    const found = this.aceUnitSlots(this.unit)
++      .filter(slot => !this.aceSlotIsEmpty(slot))
++      .map(slot => dryPresetFor(slot.material))
++      .filter((preset): preset is AceDryPreset => preset != null)
++
++    return found.sort((a, b) => a.temp - b.temp)[0]
++  }
++
++  get remainingLabel (): string {
++    const total = this.aceDryerRemainingSeconds(this.dryer)
++    const hours = Math.floor(total / 3600)
++    const minutes = Math.floor((total % 3600) / 60)
++
++    return hours > 0
++      ? `${hours}h ${minutes.toString().padStart(2, '0')}m`
++      : `${minutes}m`
++  }
++
++  created () {
++    if (this.suggested) this.applyPreset(this.suggested)
++  }
++
++  applyPreset (preset: AceDryPreset) {
++    this.dryTemp = preset.temp
++    this.dryDuration = preset.minutes
++  }
++
++  async toggleDryer () {
++    const instance = this.unit.index
++
++    if (this.drying) {
++      const result = await this.$confirm(
++        'Stop drying? This turns off the ACE heater and fans.',
++        { title: 'Stop dryer', color: 'card-heading', icon: '$error' }
++      )
++
++      if (result) {
++        this.aceSendGcode(`ACE_STOP_DRYING INSTANCE=${instance}`)
++      }
++      return
++    }
++
++    this.aceSendGcode(`ACE_START_DRYING INSTANCE=${instance} TEMP=${this.dryTemp} DURATION=${this.dryDuration}`)
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++.ace-compact-select {
++  max-width: 96px;
++  font-size: 0.8rem;
++}
++
++.ace-compact-select :deep(.v-input__slot) {
++  min-height: 28px !important;
++}
++
++.ace-compact-select :deep(.v-input__append-inner) {
++  margin-top: 2px !important;
++}
++
++.ace-pulse {
++  animation: ace-pulse 2s infinite ease-in-out;
++}
++
++@keyframes ace-pulse {
++  0%, 100% { opacity: 1; }
++  50% { opacity: 0.55; }
++}
++</style>
+diff --git a/src/components/widgets/acepro/AceProHealth.vue b/src/components/widgets/acepro/AceProHealth.vue
+new file mode 100644
+index 0000000..be6e437
+--- /dev/null
++++ b/src/components/widgets/acepro/AceProHealth.vue
+@@ -0,0 +1,185 @@
++<template>
++  <div class="ace-health">
++    <div class="text-subtitle-2 mb-1">
++      Units
++    </div>
++    <v-simple-table dense>
++      <thead>
++        <tr>
++          <th>Unit</th>
++          <th>Connection</th>
++          <th>Firmware</th>
++          <th>Port</th>
++          <th>Protocol</th>
++          <th>RFID sync</th>
++          <th>Chamber</th>
++          <th />
++        </tr>
++      </thead>
++      <tbody>
++        <tr
++          v-for="unit in aceUnits"
++          :key="`health:${unit.index}`"
++        >
++          <td class="font-weight-bold text-no-wrap">
++            ACE {{ unit.index + 1 }}
++          </td>
++          <td>
++            <v-chip
++              x-small
++              label
++              :color="connectionColor(unit)"
++            >
++              {{ unit.state.connection_state || 'no data' }}
++            </v-chip>
++          </td>
++          <td>{{ unit.state.firmware || '–' }}</td>
++          <td class="text-caption">
++            {{ unit.state.usb_port || '–' }}
++          </td>
++          <td class="text-caption">
++            {{ unit.state.protocol || '–' }}
++          </td>
++          <td>{{ unit.state.rfid_sync_enabled ? 'on' : 'off' }}</td>
++          <td>
++            {{ chamber(unit) }}
++          </td>
++          <td class="text-right text-no-wrap">
++            <app-btn
++              x-small
++              text
++              :disabled="!klippyReady || !aceEnabled"
++              @click="aceSendGcode(`ACE_RECONNECT INSTANCE=${unit.index}`)"
++            >
++              Reconnect
++            </app-btn>
++          </td>
++        </tr>
++      </tbody>
++    </v-simple-table>
++    <div class="mt-2">
++      <app-btn
++        x-small
++        outlined
++        :disabled="!klippyReady"
++        @click="aceSendGcode('ACE_GET_CONNECTION_STATUS')"
++      >
++        Connection report in console
++      </app-btn>
++    </div>
++
++    <div class="text-subtitle-2 mt-4 mb-1">
++      Counters
++    </div>
++    <v-row dense>
++      <v-col
++        cols="4"
++        class="text-center"
++      >
++        <div class="text-h5">
++          {{ stats.tool_changes || 0 }}
++        </div>
++        <div class="text-caption secondary--text">
++          Tool changes
++        </div>
++      </v-col>
++      <v-col
++        cols="4"
++        class="text-center"
++      >
++        <div class="text-h5">
++          {{ stats.cuts || 0 }}
++        </div>
++        <div class="text-caption secondary--text">
++          Filament cuts
++        </div>
++      </v-col>
++      <v-col
++        cols="4"
++        class="text-center"
++      >
++        <div class="text-h5">
++          {{ purgeGrams }} g
++        </div>
++        <div class="text-caption secondary--text">
++          Purged ({{ Math.round((stats.purge_mm || 0) / 10) / 100 }} m)
++        </div>
++      </v-col>
++    </v-row>
++    <div class="text-caption secondary--text mt-1">
++      Purge weight assumes 1.75 mm PLA. Counting started when the driver was updated.
++    </div>
++    <div
++      v-if="cutWarning"
++      class="text-caption warning--text mt-2"
++    >
++      {{ cutWarning }}
++    </div>
++    <div class="mt-2">
++      <app-btn
++        x-small
++        text
++        color="error"
++        :disabled="!klippyReady"
++        @click="resetStats"
++      >
++        Reset counters…
++      </app-btn>
++    </div>
++  </div>
++</template>
++
++<script lang="ts">
++import { Component, Mixins } from 'vue-property-decorator'
++import AceProMixin from './acepro'
++import type { AceStats, AceUnit } from './types'
++
++// Filament in 1.75 mm PLA weighs about 3 g per metre
++const GRAMS_PER_MM = 0.003
++
++@Component
++export default class AceProHealth extends Mixins(AceProMixin) {
++  get stats (): AceStats {
++    return this.aceManager?.stats ?? {}
++  }
++
++  get purgeGrams (): number {
++    return Math.round((this.stats.purge_mm ?? 0) * GRAMS_PER_MM)
++  }
++
++  get cutWarning (): string {
++    return (this.stats.cuts ?? 0) >= 2000
++      ? 'The cutter has made 2000 cuts or more. Check the blade and the lever.'
++      : ''
++  }
++
++  connectionColor (unit: AceUnit): string | undefined {
++    switch (unit.state.connection_state) {
++      case 'connected': return 'success'
++      case 'connecting':
++      case 'initializing':
++      case 'reconnecting': return 'warning'
++      case 'disabled': return undefined
++      default: return 'error'
++    }
++  }
++
++  chamber (unit: AceUnit): string {
++    const temp = unit.state.temp
++    const parts = [typeof temp === 'number' && temp > 0 ? `${temp}°C` : '--']
++
++    if (unit.state.humidity) parts.push(`${unit.state.humidity}% RH`)
++    return parts.join(' · ')
++  }
++
++  async resetStats () {
++    const result = await this.$confirm('Reset the tool change, cut and purge counters to zero?', {
++      title: 'Reset counters',
++      color: 'card-heading',
++      icon: '$error'
++    })
++
++    if (result) this.aceSendGcode('ACE_RESET_STATS')
++  }
++}
++</script>
+diff --git a/src/components/widgets/acepro/AceProHealthDialog.vue b/src/components/widgets/acepro/AceProHealthDialog.vue
+new file mode 100644
+index 0000000..cbb2234
+--- /dev/null
++++ b/src/components/widgets/acepro/AceProHealthDialog.vue
+@@ -0,0 +1,25 @@
++<template>
++  <app-dialog
++    v-model="open"
++    title="ACE health and counters"
++    width="780"
++    no-actions
++  >
++    <v-card-text>
++      <ace-pro-health />
++    </v-card-text>
++  </app-dialog>
++</template>
++
++<script lang="ts">
++import { Component, Vue, VModel } from 'vue-property-decorator'
++import AceProHealth from './AceProHealth.vue'
++
++@Component({
++  components: { AceProHealth }
++})
++export default class AceProHealthDialog extends Vue {
++  @VModel({ type: Boolean })
++  open!: boolean
++}
++</script>
+diff --git a/src/components/widgets/acepro/AceProProgress.vue b/src/components/widgets/acepro/AceProProgress.vue
+new file mode 100644
+index 0000000..59ce6f5
+--- /dev/null
++++ b/src/components/widgets/acepro/AceProProgress.vue
+@@ -0,0 +1,142 @@
++<template>
++  <v-alert
++    v-if="active"
++    dense
++    text
++    color="primary"
++    class="mb-3 ace-progress"
++  >
++    <div class="d-flex align-center flex-wrap">
++      <v-icon
++        small
++        left
++        color="primary"
++      >
++        {{ icons.swap }}
++      </v-icon>
++      <span class="font-weight-bold mr-2">Tool change</span>
++      <v-chip
++        small
++        label
++        class="mr-2"
++      >
++        {{ fromLabel }}
++      </v-chip>
++      <v-icon small>
++        $chevronRight
++      </v-icon>
++      <v-chip
++        small
++        label
++        color="primary"
++        class="ml-2"
++      >
++        {{ toLabel }}
++      </v-chip>
++      <v-spacer />
++      <span class="text-caption">{{ stageLabel }}</span>
++    </div>
++
++    <div class="d-flex mt-2 ace-steps">
++      <div
++        v-for="(step, index) in steps"
++        :key="`ace-step:${step.id}`"
++        class="ace-step flex-grow-1 text-center"
++        :class="{ 'ace-step--done': index < stageIndex, 'ace-step--now': index === stageIndex }"
++      >
++        <div class="ace-step__bar" />
++        <div class="text-caption">
++          {{ step.label }}
++        </div>
++      </div>
++    </div>
++    <div class="text-caption secondary--text mt-1">
++      Estimated from the loaded tool and the filament position.
++    </div>
++  </v-alert>
++</template>
++
++<script lang="ts">
++import { Component, Mixins } from 'vue-property-decorator'
++import { mdiSwapHorizontal } from '@mdi/js'
++import AceProMixin from './acepro'
++
++@Component
++export default class AceProProgress extends Mixins(AceProMixin) {
++  readonly icons = { swap: mdiSwapHorizontal }
++
++  readonly steps = [
++    { id: 'retract', label: 'Retract & cut' },
++    { id: 'unload', label: 'Unload' },
++    { id: 'load', label: 'Load' },
++    { id: 'purge', label: 'Purge & wipe' }
++  ]
++
++  get active (): boolean {
++    return this.aceToolchangeActive
++  }
++
++  get target (): number {
++    const value = this.aceManager?.target_index
++
++    return typeof value === 'number' ? value : -1
++  }
++
++  get fromLabel (): string {
++    return this.aceCurrentTool >= 0 ? `T${this.aceCurrentTool}` : 'empty'
++  }
++
++  get toLabel (): string {
++    return this.target >= 0 ? `T${this.target}` : 'unload'
++  }
++
++  get stageIndex (): number {
++    const position = this.aceFilamentPosition
++
++    if (this.aceCurrentTool >= 0 && this.aceCurrentTool === this.target) return 3
++    if (this.aceCurrentTool >= 0) return position === 'nozzle' ? 0 : 1
++    return position === 'nozzle' ? 3 : 2
++  }
++
++  get stageLabel (): string {
++    return this.steps[this.stageIndex].label + '…'
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++.ace-step {
++  padding: 0 2px;
++  opacity: 0.55;
++}
++
++.ace-step__bar {
++  height: 4px;
++  border-radius: 2px;
++  background: rgba(128, 128, 128, 0.4);
++  margin-bottom: 2px;
++}
++
++.ace-step--done {
++  opacity: 0.9;
++}
++
++.ace-step--done .ace-step__bar {
++  background: var(--v-primary-base);
++}
++
++.ace-step--now {
++  opacity: 1;
++  font-weight: bold;
++}
++
++.ace-step--now .ace-step__bar {
++  background: var(--v-primary-base);
++  animation: ace-step-pulse 1.2s infinite ease-in-out;
++}
++
++@keyframes ace-step-pulse {
++  0%, 100% { opacity: 1; }
++  50% { opacity: 0.35; }
++}
++</style>
+diff --git a/src/components/widgets/acepro/AceProRack.vue b/src/components/widgets/acepro/AceProRack.vue
+new file mode 100644
+index 0000000..6ba890e
+--- /dev/null
++++ b/src/components/widgets/acepro/AceProRack.vue
+@@ -0,0 +1,21 @@
++<template>
++  <div class="ace-rack-list">
++    <ace-pro-rack-unit
++      v-for="unit in aceUnits"
++      :key="`rack-unit:${unit.index}`"
++      :unit="unit"
++      @slot-click="$emit('slot-click', $event)"
++    />
++  </div>
++</template>
++
++<script lang="ts">
++import { Component, Mixins } from 'vue-property-decorator'
++import AceProMixin from './acepro'
++import AceProRackUnit from './AceProRackUnit.vue'
++
++@Component({
++  components: { AceProRackUnit }
++})
++export default class AceProRack extends Mixins(AceProMixin) {}
++</script>
+diff --git a/src/components/widgets/acepro/AceProRackUnit.vue b/src/components/widgets/acepro/AceProRackUnit.vue
+new file mode 100644
+index 0000000..54eeffc
+--- /dev/null
++++ b/src/components/widgets/acepro/AceProRackUnit.vue
+@@ -0,0 +1,217 @@
++<template>
++  <div class="ace-rack">
++    <div
++      class="ace-rack__unit rounded pa-2 mb-3"
++      :class="$vuetify.theme.dark ? 'grey darken-4' : 'grey lighten-4'"
++    >
++      <div class="d-flex align-center mb-1">
++        <span
++          v-if="aceUnits.length > 1"
++          class="font-weight-bold mr-2"
++        >ACE {{ unit.index + 1 }}</span>
++        <v-chip
++          x-small
++          label
++          :color="unit.state.connection_state === 'connected' ? 'success' : 'error'"
++        >
++          {{ unit.state.connection_state || 'no data' }}
++        </v-chip>
++        <v-spacer />
++        <span class="text-caption">
++          <v-icon x-small>$thermometer</v-icon>
++          {{ unit.state.temp ? `${unit.state.temp}°C` : '--°C' }}
++        </span>
++      </div>
++
++      <svg
++        :viewBox="`0 0 360 ${rows * 58 + 16}`"
++        class="ace-rack__svg"
++      >
++        <!-- common feed tube on the right -->
++        <path
++          :d="`M326 ${rows * 58 + 8} V12 H344`"
++          fill="none"
++          class="ace-rack__tube"
++        />
++
++        <g
++          v-for="slot in aceUnitSlots(unit)"
++          :key="`rack-slot:${unit.index}:${slot.index}`"
++          class="ace-rack__row"
++          :class="{ 'ace-rack__row--active': slot.tool === aceCurrentTool }"
++          role="button"
++          tabindex="0"
++          @click="$emit('slot-click', { unit: unit.index, slot: slot.index })"
++          @keydown.enter="$emit('slot-click', { unit: unit.index, slot: slot.index })"
++        >
++          <title>{{ tooltip(slot) }}</title>
++          <rect
++            x="4"
++            :y="8 + slot.index * 58"
++            width="344"
++            height="52"
++            rx="10"
++            class="ace-rack__tray"
++          />
++          <text
++            x="14"
++            :y="40 + slot.index * 58"
++            class="ace-rack__tool"
++          >
++            T{{ slot.tool }}
++          </text>
++
++          <!-- filament from the spool to the common tube -->
++          <path
++            :d="`M92 ${34 + slot.index * 58} H326`"
++            fill="none"
++            :stroke="aceSlotIsEmpty(slot) ? 'transparent' : aceSlotColor(slot)"
++            stroke-width="3"
++            stroke-linecap="round"
++            :class="{ 'ace-rack__thread--active': slot.tool === aceCurrentTool }"
++          />
++
++          <circle
++            cx="66"
++            :cy="34 + slot.index * 58"
++            r="22"
++            :fill="aceSlotIsEmpty(slot) ? 'transparent' : aceSlotColor(slot)"
++            :stroke="aceSlotIsEmpty(slot) ? '#888' : 'rgba(0,0,0,0.4)'"
++            stroke-width="2"
++            :stroke-dasharray="aceSlotIsEmpty(slot) ? '4 3' : undefined"
++            :class="{ 'ace-rack__spin': unit.state.feed_assist_slot === slot.index }"
++            :style="{ transformOrigin: `66px ${34 + slot.index * 58}px` }"
++          />
++          <circle
++            cx="66"
++            :cy="34 + slot.index * 58"
++            r="10"
++            class="ace-rack__hub"
++          />
++          <circle
++            cx="66"
++            :cy="34 + slot.index * 58"
++            r="3.5"
++            fill="rgba(0,0,0,0.6)"
++          />
++
++          <text
++            x="104"
++            :y="28 + slot.index * 58"
++            class="ace-rack__material"
++          >
++            {{ aceSlotIsEmpty(slot) ? 'Empty' : aceSlotMaterial(slot) }}
++          </text>
++          <text
++            x="104"
++            :y="52 + slot.index * 58"
++            class="ace-rack__small"
++          >
++            {{ caption(slot) }}
++          </text>
++        </g>
++      </svg>
++
++      <ace-pro-dryer
++        :unit="unit"
++        class="mt-1"
++      />
++    </div>
++  </div>
++</template>
++<script lang="ts">
++import { Component, Mixins, Prop } from 'vue-property-decorator'
++import AceProMixin from './acepro'
++import AceProDryer from './AceProDryer.vue'
++import type { AceSlotState, AceUnit } from './types'
++
++@Component({
++  components: { AceProDryer }
++})
++export default class AceProRackUnit extends Mixins(AceProMixin) {
++  @Prop({ type: Object, required: true })
++  readonly unit!: AceUnit
++
++  readonly rows = 4
++
++  caption (slot: AceSlotState): string {
++    if (slot.tool === this.aceCurrentTool) return 'loaded'
++    if (this.aceSlotIsEmpty(slot)) return '--'
++    return [slot.temp ? `${slot.temp}°C` : '', slot.status].filter(Boolean).join(' · ')
++  }
++
++  tooltip (slot: AceSlotState): string {
++    return `T${slot.tool} · ${this.aceSlotIsEmpty(slot) ? 'empty' : this.aceSlotMaterial(slot)} — click to edit or move`
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++.ace-rack__svg {
++  width: 100%;
++  max-width: 520px;
++  display: block;
++  margin: 0 auto;
++}
++
++.ace-rack__tray {
++  fill: rgba(128, 128, 128, 0.12);
++  stroke: rgba(128, 128, 128, 0.35);
++  stroke-width: 1.5;
++}
++
++.ace-rack__row {
++  cursor: pointer;
++  outline: none;
++}
++
++.ace-rack__row:hover .ace-rack__tray,
++.ace-rack__row:focus-visible .ace-rack__tray {
++  fill: rgba(128, 128, 128, 0.22);
++}
++
++.ace-rack__row--active .ace-rack__tray {
++  stroke: var(--v-primary-base);
++  stroke-width: 2.5;
++}
++
++.ace-rack__tube {
++  stroke: rgba(128, 128, 128, 0.7);
++  stroke-width: 4;
++  stroke-linecap: round;
++}
++
++.ace-rack__tool {
++  font-size: 13px;
++  font-weight: bold;
++  fill: currentColor;
++}
++
++.ace-rack__material {
++  font-size: 15px;
++  font-weight: bold;
++  fill: currentColor;
++}
++
++.ace-rack__small {
++  font-size: 11px;
++  fill: currentColor;
++  opacity: 0.7;
++}
++
++.ace-rack__hub {
++  fill: rgba(128, 128, 128, 0.5);
++}
++
++.ace-rack__thread--active {
++  stroke-width: 4;
++}
++
++.ace-rack__spin {
++  animation: ace-rack-spin 3s linear infinite;
++}
++
++@keyframes ace-rack-spin {
++  to { transform: rotate(-360deg); }
++}
 +</style>
 diff --git a/src/components/widgets/acepro/AceProSettingsMenu.vue b/src/components/widgets/acepro/AceProSettingsMenu.vue
 new file mode 100644
-index 0000000..1d1c0e4
+index 0000000..ff1f17c
 --- /dev/null
 +++ b/src/components/widgets/acepro/AceProSettingsMenu.vue
-@@ -0,0 +1,194 @@
+@@ -0,0 +1,236 @@
 +<template>
 +  <v-menu
 +    bottom
@@ -844,6 +2630,39 @@ index 0000000..1d1c0e4
 +          Reset active tool…
 +        </v-list-item-title>
 +      </v-list-item>
++
++      <v-divider class="my-1" />
++      <v-subheader class="ace-menu-header">
++        Quick actions
++      </v-subheader>
++
++      <v-list-item
++        :disabled="!canMove"
++        @click="confirmRun('Retract every loaded spool all the way back into its ACE unit?', 'ACE_FULL_UNLOAD')"
++      >
++        <v-list-item-title>Unload all spools</v-list-item-title>
++      </v-list-item>
++      <v-list-item
++        :disabled="!canMove"
++        @click="confirmRun('Move the toolhead to the cutter and cut the filament now?', 'CUT_TIP')"
++      >
++        <v-list-item-title>Test the cutter</v-list-item-title>
++      </v-list-item>
++
++      <v-divider class="my-1" />
++
++      <v-list-item @click="aceUi.cutterWizard = true">
++        <v-list-item-title>Cutter calibration…</v-list-item-title>
++      </v-list-item>
++      <v-list-item @click="aceUi.health = true">
++        <v-list-item-title>Health and counters…</v-list-item-title>
++      </v-list-item>
++      <v-list-item
++        v-if="$route.name !== 'ace'"
++        @click="$router.push({ name: 'ace' })"
++      >
++        <v-list-item-title>Open the full ACE page</v-list-item-title>
++      </v-list-item>
 +    </v-list>
 +  </v-menu>
 +</template>
@@ -851,10 +2670,13 @@ index 0000000..1d1c0e4
 +<script lang="ts">
 +import { Component, Mixins } from 'vue-property-decorator'
 +import AceProMixin from './acepro'
++import { aceUi } from './aceUi'
 +import type { AceEndlessSpoolMode } from './types'
 +
 +@Component
 +export default class AceProSettingsMenu extends Mixins(AceProMixin) {
++  readonly aceUi = aceUi
++
 +  readonly endlessModes: Array<{ value: AceEndlessSpoolMode, text: string }> = [
 +    { value: 'exact', text: 'Material and color' },
 +    { value: 'material', text: 'Material only' },
@@ -927,6 +2749,12 @@ index 0000000..1d1c0e4
 +  }
 +}
 +</script>
++
++<style lang="scss" scoped>
++.ace-menu-header {
++  height: 28px;
++}
++</style>
 diff --git a/src/components/widgets/acepro/AceProSlot.vue b/src/components/widgets/acepro/AceProSlot.vue
 new file mode 100644
 index 0000000..3ea2cd9
@@ -1110,10 +2938,10 @@ index 0000000..3ea2cd9
 +</style>
 diff --git a/src/components/widgets/acepro/AceProSlotDialog.vue b/src/components/widgets/acepro/AceProSlotDialog.vue
 new file mode 100644
-index 0000000..8686e6a
+index 0000000..ed50d66
 --- /dev/null
 +++ b/src/components/widgets/acepro/AceProSlotDialog.vue
-@@ -0,0 +1,418 @@
+@@ -0,0 +1,508 @@
 +<template>
 +  <app-dialog
 +    v-model="open"
@@ -1165,6 +2993,16 @@ index 0000000..8686e6a
 +        </v-col>
 +      </v-row>
 +
++      <v-text-field
++        v-model="presetName"
++        label="Slicer preset name (optional)"
++        hint="Shown in the slot and sent to OrcaSlicer, for example AF Sunlu PLA"
++        persistent-hint
++        dense
++        outlined
++        class="mt-3"
++      />
++
 +      <div class="d-flex align-center mt-3">
 +        <span class="text-body-2 mr-2">Color</span>
 +        <div
@@ -1201,6 +3039,47 @@ index 0000000..8686e6a
 +        class="mx-auto mt-2"
 +        @update:color="setColor"
 +      />
++
++      <v-divider class="my-3" />
++
++      <div class="text-subtitle-2 mb-1">
++        If this spool runs out
++      </div>
++      <v-select
++        v-model="chain"
++        :items="chainItems"
++        multiple
++        chips
++        small-chips
++        deletable-chips
++        dense
++        outlined
++        hide-details
++        label="Take over with, in this order"
++        :placeholder="endlessEnabled ? 'Use the match mode' : 'Endless spool is off'"
++      >
++        <template #item="{ item }">
++          <div
++            class="ace-swatch ace-swatch--small mr-2"
++            :style="{ backgroundColor: item.color }"
++          />
++          {{ item.text }}
++        </template>
++      </v-select>
++      <div class="d-flex align-center mt-1">
++        <span class="text-caption secondary--text">
++          Leave empty to use the endless spool match mode. If none of the chosen spools is ready, the match mode is used.
++        </span>
++        <v-spacer />
++        <app-btn
++          x-small
++          outlined
++          :disabled="!klippyReady || !chainChanged"
++          @click="saveChain"
++        >
++          Save chain
++        </app-btn>
++      </div>
 +
 +      <v-divider class="my-3" />
 +
@@ -1362,6 +3241,8 @@ index 0000000..8686e6a
 +  readonly slotIndex!: number
 +
 +  material = ''
++  presetName = ''
++  chain: number[] = []
 +  temp = 0
 +  color = '#FF0000'
 +  showPicker = false
@@ -1379,6 +3260,8 @@ index 0000000..8686e6a
 +    const slot = this.slotState
 +
 +    this.material = this.aceSlotIsEmpty(slot) ? 'PLA' : (slot.material || 'PLA')
++    this.presetName = slot.custom_name && slot.custom_name !== slot.material ? slot.custom_name : ''
++    this.chain = [...(this.aceManager?.endless_chain?.[String(this.tool)] ?? [])]
 +    this.temp = slot.temp || ACE_MATERIAL_TEMPS[this.material] || 210
 +    this.color = this.aceSlotIsEmpty(slot) ? '#FF0000' : this.aceSlotColor(slot).toUpperCase()
 +  }
@@ -1417,6 +3300,33 @@ index 0000000..8686e6a
 +
 +  get feeding (): boolean {
 +    return this.unit.state.feed_assist_slot === this.slotIndex
++  }
++
++  get endlessEnabled (): boolean {
++    return this.aceManager?.endless_spool_enabled === true
++  }
++
++  get savedChain (): number[] {
++    return this.aceManager?.endless_chain?.[String(this.tool)] ?? []
++  }
++
++  get chainChanged (): boolean {
++    return this.chain.join(',') !== this.savedChain.join(',')
++  }
++
++  get chainItems (): Array<{ value: number, text: string, color: string, disabled: boolean }> {
++    return this.aceAllSlots
++      .filter(entry => entry.slot.tool !== this.tool)
++      .map(entry => ({
++        value: entry.slot.tool ?? 0,
++        text: `T${entry.slot.tool} · ${this.aceSlotIsEmpty(entry.slot) ? 'empty' : this.aceSlotMaterial(entry.slot)}`,
++        color: this.aceSlotColor(entry.slot),
++        disabled: this.aceSlotIsEmpty(entry.slot)
++      }))
++  }
++
++  saveChain () {
++    this.aceSendGcode(`ACE_SET_ENDLESS_CHAIN TOOL=${this.tool} NEXT=${this.chain.join(',')}`)
 +  }
 +
 +  get canMove (): boolean {
@@ -1482,8 +3392,11 @@ index 0000000..8686e6a
 +
 +    const material = this.material.trim().replace(/["\s]+/g, '_')
 +
++    const preset = this.presetName.trim().replace(/["\\]+/g, '')
++    const presetParam = preset ? ` FILAMENT_SETTINGS_ID="${preset}"` : ''
++
 +    this.aceSendGcode(
-+      `ACE_SET_SLOT INSTANCE=${this.unitIndex} INDEX=${this.slotIndex} MATERIAL="${material}" TEMP=${Math.round(this.temp)} COLOR="${this.rgb}"`
++      `ACE_SET_SLOT INSTANCE=${this.unitIndex} INDEX=${this.slotIndex} MATERIAL="${material}" TEMP=${Math.round(this.temp)} COLOR="${this.rgb}"${presetParam}`
 +    )
 +    this.open = false
 +  }
@@ -1522,6 +3435,11 @@ index 0000000..8686e6a
 +  border: 1px solid rgba(128, 128, 128, 0.6);
 +}
 +
++.ace-swatch--small {
++  width: 14px;
++  height: 14px;
++}
++
 +.ace-swatch--preset {
 +  cursor: pointer;
 +  width: 20px;
@@ -1532,12 +3450,442 @@ index 0000000..8686e6a
 +  margin: 0 6px 6px 0;
 +}
 +</style>
+diff --git a/src/components/widgets/acepro/AceProStrip.vue b/src/components/widgets/acepro/AceProStrip.vue
+new file mode 100644
+index 0000000..cd25092
+--- /dev/null
++++ b/src/components/widgets/acepro/AceProStrip.vue
+@@ -0,0 +1,251 @@
++<template>
++  <div class="ace-strip">
++    <div class="d-flex flex-wrap align-end">
++      <div
++        v-for="unit in aceUnits"
++        :key="`strip-unit:${unit.index}`"
++        class="ace-strip__unit d-flex align-end mr-3 mb-1"
++      >
++        <span
++          v-if="aceUnits.length > 1"
++          class="text-caption font-weight-bold secondary--text mr-1 ace-strip__label"
++        >
++          ACE {{ unit.index + 1 }}
++        </span>
++        <div
++          v-for="slot in aceUnitSlots(unit)"
++          :key="`strip-slot:${unit.index}:${slot.index}`"
++          class="ace-strip__slot text-center"
++          :class="{
++            'ace-strip__slot--active': slot.tool === aceCurrentTool,
++            'ace-strip__slot--selected': isSelected(unit.index, slot.index)
++          }"
++          role="button"
++          tabindex="0"
++          :title="tooltip(slot)"
++          @click="select(unit.index, slot.index)"
++          @keydown.enter="select(unit.index, slot.index)"
++        >
++          <div
++            class="ace-strip__dot"
++            :class="{ 'ace-strip__dot--empty': aceSlotIsEmpty(slot) }"
++            :style="aceSlotIsEmpty(slot) ? undefined : { backgroundColor: aceSlotColor(slot) }"
++          />
++          <div class="text-caption ace-strip__tool">
++            T{{ slot.tool }}
++          </div>
++        </div>
++      </div>
++    </div>
++
++    <v-expand-transition>
++      <div
++        v-if="selectedEntry"
++        class="ace-strip__details rounded pa-2 mt-2"
++        :class="$vuetify.theme.dark ? 'grey darken-4' : 'grey lighten-4'"
++      >
++        <div class="d-flex align-center flex-wrap">
++          <div
++            class="ace-strip__dot ace-strip__dot--small mr-2"
++            :class="{ 'ace-strip__dot--empty': selectedEmpty }"
++            :style="selectedEmpty ? undefined : { backgroundColor: aceSlotColor(selectedEntry.slot) }"
++          />
++          <div>
++            <div class="text-body-2 font-weight-bold">
++              T{{ selectedEntry.slot.tool }} ·
++              {{ selectedEmpty ? 'Empty' : aceSlotMaterial(selectedEntry.slot) }}
++              <template v-if="!selectedEmpty && selectedEntry.slot.temp">
++                · {{ selectedEntry.slot.temp }}°C
++              </template>
++            </div>
++            <div class="text-caption secondary--text">
++              {{ details }}
++            </div>
++          </div>
++          <v-spacer />
++          <app-btn
++            v-if="selectedEntry.slot.tool !== aceCurrentTool"
++            x-small
++            color="primary"
++            class="mr-1"
++            :disabled="!aceCanMove || selectedEmpty"
++            @click="aceSendGcode(`T${selectedEntry.slot.tool}`)"
++          >
++            Load
++          </app-btn>
++          <app-btn
++            v-else
++            x-small
++            color="warning"
++            class="mr-1"
++            :disabled="!aceCanMove"
++            @click="aceSendGcode('TR')"
++          >
++            Unload
++          </app-btn>
++          <app-btn
++            x-small
++            outlined
++            @click="$emit('slot-click', { unit: selectedEntry.unit.index, slot: selectedEntry.slot.index })"
++          >
++            Edit
++          </app-btn>
++        </div>
++      </div>
++    </v-expand-transition>
++
++    <div class="mt-2">
++      <app-btn
++        x-small
++        text
++        @click="showDryers = !showDryers"
++      >
++        <v-icon
++          x-small
++          left
++        >
++          $fan
++        </v-icon>
++        Dryers {{ showDryers ? '▴' : '▾' }}
++        <v-chip
++          v-if="dryingCount > 0"
++          x-small
++          label
++          color="orange"
++          class="ml-1"
++        >
++          {{ dryingCount }} drying
++        </v-chip>
++      </app-btn>
++      <v-expand-transition>
++        <div v-if="showDryers">
++          <div
++            v-for="unit in aceUnits"
++            :key="`strip-dryer:${unit.index}`"
++            class="d-flex align-center mt-1"
++          >
++            <span
++              v-if="aceUnits.length > 1"
++              class="text-caption font-weight-bold mr-2"
++            >ACE {{ unit.index + 1 }}</span>
++            <ace-pro-dryer
++              :unit="unit"
++              compact
++              class="flex-grow-1"
++            />
++          </div>
++        </div>
++      </v-expand-transition>
++    </div>
++  </div>
++</template>
++
++<script lang="ts">
++import { Component, Mixins } from 'vue-property-decorator'
++import AceProMixin from './acepro'
++import AceProDryer from './AceProDryer.vue'
++import type { AceSlotState, AceUnit } from './types'
++
++@Component({
++  components: { AceProDryer }
++})
++export default class AceProStrip extends Mixins(AceProMixin) {
++  selected: { unit: number, slot: number } | null = null
++  showDryers = false
++
++  get selectedEntry (): { unit: AceUnit, slot: AceSlotState } | undefined {
++    const sel = this.selected
++
++    return sel == null
++      ? undefined
++      : this.aceAllSlots.find(entry => entry.unit.index === sel.unit && entry.slot.index === sel.slot)
++  }
++
++  get selectedEmpty (): boolean {
++    return this.selectedEntry != null && this.aceSlotIsEmpty(this.selectedEntry.slot)
++  }
++
++  get dryingCount (): number {
++    return this.aceUnits.filter(unit => this.aceIsDrying(this.aceUnitDryer(unit))).length
++  }
++
++  get details (): string {
++    const slot = this.selectedEntry?.slot
++
++    if (!slot) return ''
++    return [
++      slot.status,
++      slot.brand,
++      slot.custom_name && slot.custom_name !== slot.material ? slot.custom_name : undefined,
++      this.aceSlotIsRfid(slot) ? 'RFID' : undefined
++    ].filter(Boolean).join(' · ')
++  }
++
++  isSelected (unit: number, slot: number): boolean {
++    return this.selected?.unit === unit && this.selected?.slot === slot
++  }
++
++  select (unit: number, slot: number) {
++    this.selected = this.isSelected(unit, slot) ? null : { unit, slot }
++  }
++
++  tooltip (slot: AceSlotState): string {
++    return this.aceSlotIsEmpty(slot)
++      ? `T${slot.tool} · empty`
++      : `T${slot.tool} · ${this.aceSlotMaterial(slot)}${slot.temp ? ` · ${slot.temp}°C` : ''}`
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++.ace-strip__slot {
++  cursor: pointer;
++  padding: 2px 4px;
++  margin-right: 2px;
++  border-radius: 6px;
++  border: 2px solid transparent;
++  transition: background-color 0.15s;
++}
++
++.ace-strip__slot:hover,
++.ace-strip__slot:focus-visible {
++  background-color: rgba(128, 128, 128, 0.15);
++  outline: none;
++}
++
++.ace-strip__slot--active {
++  border-color: var(--v-primary-base);
++}
++
++.ace-strip__slot--selected {
++  background-color: rgba(128, 128, 128, 0.2);
++}
++
++.ace-strip__dot {
++  width: 28px;
++  height: 28px;
++  margin: 0 auto;
++  border-radius: 50%;
++  border: 1px solid rgba(128, 128, 128, 0.7);
++  box-shadow: inset 0 0 0 7px rgba(0, 0, 0, 0.0), inset 0 0 0 9px rgba(0, 0, 0, 0.12);
++}
++
++.ace-strip__dot--small {
++  width: 22px;
++  height: 22px;
++}
++
++.ace-strip__dot--empty {
++  border-style: dashed;
++  background: transparent;
++  box-shadow: none;
++}
++
++.ace-strip__tool {
++  line-height: 1.1;
++}
++
++.ace-strip__label {
++  padding-bottom: 14px;
++}
++</style>
+diff --git a/src/components/widgets/acepro/AceProTable.vue b/src/components/widgets/acepro/AceProTable.vue
+new file mode 100644
+index 0000000..b900ca2
+--- /dev/null
++++ b/src/components/widgets/acepro/AceProTable.vue
+@@ -0,0 +1,167 @@
++<template>
++  <div class="ace-table">
++    <v-simple-table dense>
++      <thead>
++        <tr>
++          <th class="text-left">
++            Tool
++          </th>
++          <th />
++          <th class="text-left">
++            Material
++          </th>
++          <th class="text-left">
++            Temp
++          </th>
++          <th class="text-left">
++            Status
++          </th>
++          <th />
++        </tr>
++      </thead>
++      <tbody>
++        <template v-for="unit in aceUnits">
++          <tr
++            :key="`table-unit:${unit.index}`"
++            class="ace-table__unit"
++          >
++            <td colspan="6">
++              <div class="d-flex align-center py-1">
++                <span class="font-weight-bold mr-2">ACE {{ unit.index + 1 }}</span>
++                <v-chip
++                  x-small
++                  label
++                  :color="unit.state.connection_state === 'connected' ? 'success' : 'error'"
++                  class="mr-2"
++                >
++                  {{ unit.state.connection_state || 'no data' }}
++                </v-chip>
++                <span class="text-caption secondary--text">
++                  {{ unit.state.temp ? `${unit.state.temp}°C` : '' }}
++                </span>
++                <v-spacer />
++                <ace-pro-dryer
++                  :unit="unit"
++                  compact
++                  class="ace-table__dryer"
++                />
++              </div>
++            </td>
++          </tr>
++          <tr
++            v-for="slot in aceUnitSlots(unit)"
++            :key="`table-slot:${unit.index}:${slot.index}`"
++            class="ace-table__row"
++            :class="{ 'ace-table__row--active': slot.tool === aceCurrentTool }"
++          >
++            <td class="font-weight-bold">
++              T{{ slot.tool }}
++            </td>
++            <td>
++              <div
++                class="ace-table__dot"
++                :class="{ 'ace-table__dot--empty': aceSlotIsEmpty(slot) }"
++                :style="aceSlotIsEmpty(slot) ? undefined : { backgroundColor: aceSlotColor(slot) }"
++              />
++            </td>
++            <td>
++              {{ aceSlotIsEmpty(slot) ? '---' : aceSlotMaterial(slot) }}
++              <v-icon
++                v-if="aceSlotIsRfid(slot)"
++                x-small
++                title="Read from RFID tag"
++              >
++                {{ icons.nfc }}
++              </v-icon>
++            </td>
++            <td>{{ aceSlotIsEmpty(slot) || !slot.temp ? '--' : `${slot.temp}°C` }}</td>
++            <td :class="statusClass(slot)">
++              {{ statusLabel(slot, unit.state.feed_assist_slot) }}
++            </td>
++            <td class="text-right text-no-wrap">
++              <app-btn
++                v-if="slot.tool !== aceCurrentTool"
++                x-small
++                color="primary"
++                text
++                :disabled="!aceCanMove || aceSlotIsEmpty(slot)"
++                @click="aceSendGcode(`T${slot.tool}`)"
++              >
++                Load
++              </app-btn>
++              <app-btn
++                v-else
++                x-small
++                color="warning"
++                text
++                :disabled="!aceCanMove"
++                @click="aceSendGcode('TR')"
++              >
++                Unload
++              </app-btn>
++              <app-btn
++                x-small
++                text
++                @click="$emit('slot-click', { unit: unit.index, slot: slot.index })"
++              >
++                Edit
++              </app-btn>
++            </td>
++          </tr>
++        </template>
++      </tbody>
++    </v-simple-table>
++  </div>
++</template>
++
++<script lang="ts">
++import { Component, Mixins } from 'vue-property-decorator'
++import { mdiNfcVariant } from '@mdi/js'
++import AceProMixin from './acepro'
++import AceProDryer from './AceProDryer.vue'
++import type { AceSlotState } from './types'
++
++@Component({
++  components: { AceProDryer }
++})
++export default class AceProTable extends Mixins(AceProMixin) {
++  readonly icons = { nfc: mdiNfcVariant }
++
++  statusLabel (slot: AceSlotState, feedSlot: number | undefined): string {
++    if (slot.tool === this.aceCurrentTool) return 'loaded'
++    if (feedSlot === slot.index) return 'feeding'
++    return slot.status || 'unknown'
++  }
++
++  statusClass (slot: AceSlotState): string {
++    if (slot.tool === this.aceCurrentTool) return 'primary--text'
++    if (this.aceSlotIsEmpty(slot)) return 'grey--text'
++    return slot.status === 'ready' ? 'success--text' : 'warning--text'
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++.ace-table__unit {
++  background-color: rgba(128, 128, 128, 0.1);
++}
++
++.ace-table__row--active {
++  box-shadow: inset 3px 0 0 var(--v-primary-base);
++}
++
++.ace-table__dot {
++  width: 18px;
++  height: 18px;
++  border-radius: 50%;
++  border: 1px solid rgba(128, 128, 128, 0.7);
++}
++
++.ace-table__dot--empty {
++  border-style: dashed;
++}
++
++.ace-table__dryer {
++  max-width: 420px;
++}
++</style>
 diff --git a/src/components/widgets/acepro/AceProUnit.vue b/src/components/widgets/acepro/AceProUnit.vue
 new file mode 100644
-index 0000000..c27fd3e
+index 0000000..5cec797
 --- /dev/null
 +++ b/src/components/widgets/acepro/AceProUnit.vue
-@@ -0,0 +1,234 @@
+@@ -0,0 +1,122 @@
 +<template>
 +  <div
 +    class="ace-unit rounded pa-2"
@@ -1595,53 +3943,7 @@ index 0000000..c27fd3e
 +
 +    <v-divider class="my-2" />
 +
-+    <div class="d-flex align-center flex-wrap">
-+      <v-icon
-+        small
-+        class="mr-1"
-+        :color="drying ? 'orange' : undefined"
-+      >
-+        $fan
-+      </v-icon>
-+      <span class="text-body-2 mr-2">Dryer</span>
-+      <v-chip
-+        x-small
-+        label
-+        :color="drying ? 'orange' : undefined"
-+        :class="{ 'ace-pulse': drying }"
-+        class="mr-2"
-+      >
-+        {{ drying ? `${dryer.target_temp || '?'}°C · ${remainingLabel} left` : 'Idle' }}
-+      </v-chip>
-+      <v-spacer />
-+      <template v-if="!drying">
-+        <v-select
-+          v-model="dryTemp"
-+          :items="tempOptions"
-+          suffix="°C"
-+          dense
-+          outlined
-+          hide-details
-+          class="ace-compact-select mr-1"
-+        />
-+        <v-select
-+          v-model="dryDuration"
-+          :items="durationOptions"
-+          dense
-+          outlined
-+          hide-details
-+          class="ace-compact-select mr-1"
-+        />
-+      </template>
-+      <app-btn
-+        x-small
-+        :color="drying ? 'error' : 'primary'"
-+        :disabled="!klippyReady || !aceUnitConnected(unit)"
-+        @click="toggleDryer"
-+      >
-+        {{ drying ? 'Stop' : 'Dry' }}
-+      </app-btn>
-+    </div>
++    <ace-pro-dryer :unit="unit" />
 +  </div>
 +</template>
 +
@@ -1649,11 +3951,13 @@ index 0000000..c27fd3e
 +import { Component, Mixins, Prop } from 'vue-property-decorator'
 +import AceProMixin from './acepro'
 +import AceProSlot from './AceProSlot.vue'
-+import type { AceDryerState, AceSlotState, AceUnit } from './types'
++import AceProDryer from './AceProDryer.vue'
++import type { AceSlotState, AceUnit } from './types'
 +
 +@Component({
 +  components: {
-+    AceProSlot
++    AceProSlot,
++    AceProDryer
 +  }
 +})
 +export default class AceProUnit extends Mixins(AceProMixin) {
@@ -1663,34 +3967,8 @@ index 0000000..c27fd3e
 +  @Prop({ type: Boolean })
 +  readonly showTitle?: boolean
 +
-+  dryTemp = 50
-+  dryDuration = 240
-+
-+  readonly tempOptions = [35, 40, 45, 50, 55, 60, 65]
-+
-+  readonly durationOptions = [30, 60, 120, 180, 240, 360, 480, 720]
-+    .map(value => ({ value, text: value < 60 ? `${value} min` : `${value / 60} h` }))
-+
 +  get slots (): AceSlotState[] {
 +    return this.aceUnitSlots(this.unit)
-+  }
-+
-+  get dryer (): AceDryerState {
-+    return this.aceUnitDryer(this.unit)
-+  }
-+
-+  get drying (): boolean {
-+    return this.aceIsDrying(this.dryer)
-+  }
-+
-+  get remainingLabel (): string {
-+    const total = this.aceDryerRemainingSeconds(this.dryer)
-+    const hours = Math.floor(total / 3600)
-+    const minutes = Math.floor((total % 3600) / 60)
-+
-+    return hours > 0
-+      ? `${hours}h ${minutes.toString().padStart(2, '0')}m`
-+      : `${minutes}m`
 +  }
 +
 +  get connectionLabel (): string {
@@ -1728,56 +4006,131 @@ index 0000000..c27fd3e
 +      ? `${temp}°C`
 +      : '--°C'
 +  }
-+
-+  async toggleDryer () {
-+    const instance = this.unit.index
-+
-+    if (this.drying) {
-+      const result = await this.$confirm(
-+        'Stop drying? This turns off the ACE heater and fans.',
-+        { title: 'Stop dryer', color: 'card-heading', icon: '$error' }
-+      )
-+
-+      if (result) {
-+        this.aceSendGcode(`ACE_STOP_DRYING INSTANCE=${instance}`)
-+      }
-+      return
-+    }
-+
-+    this.aceSendGcode(`ACE_START_DRYING INSTANCE=${instance} TEMP=${this.dryTemp} DURATION=${this.dryDuration}`)
-+  }
 +}
 +</script>
+diff --git a/src/components/widgets/acepro/aceUi.ts b/src/components/widgets/acepro/aceUi.ts
+new file mode 100644
+index 0000000..e78158e
+--- /dev/null
++++ b/src/components/widgets/acepro/aceUi.ts
+@@ -0,0 +1,111 @@
++import Vue from 'vue'
 +
-+<style lang="scss" scoped>
-+.ace-compact-select {
-+  max-width: 96px;
-+  font-size: 0.8rem;
++export type AceLayout = 'grid' | 'strip' | 'rack' | 'table'
++
++export const ACE_LAYOUTS: AceLayout[] = ['grid', 'strip', 'rack', 'table']
++
++const LAYOUT_KEY = 'fluidd-ace-layout'
++const MAP_PRESETS_KEY = 'fluidd-ace-map-presets'
++const MAP_FILE_PREFIX = 'fluidd-ace-map-file:'
++
++const readStorage = (key: string): string | null => {
++  try {
++    return window.localStorage.getItem(key)
++  } catch {
++    return null
++  }
 +}
 +
-+.ace-compact-select :deep(.v-input__slot) {
-+  min-height: 28px !important;
++const writeStorage = (key: string, value: string) => {
++  try {
++    window.localStorage.setItem(key, value)
++  } catch {
++    // storage can be blocked; the UI just forgets the choice
++  }
 +}
 +
-+.ace-compact-select :deep(.v-input__append-inner) {
-+  margin-top: 2px !important;
++const readLayout = (): AceLayout => {
++  const value = readStorage(LAYOUT_KEY)
++
++  return ACE_LAYOUTS.includes(value as AceLayout) ? value as AceLayout : 'grid'
 +}
 +
-+.ace-pulse {
-+  animation: ace-pulse 2s infinite ease-in-out;
++// Shared UI state for the ACE Pro card, its dialogs and the full page.
++export const aceUi = Vue.observable({
++  layout: readLayout(),
++  cutterWizard: false,
++  health: false
++})
++
++export const setAceLayout = (layout: AceLayout) => {
++  aceUi.layout = layout
++  writeStorage(LAYOUT_KEY, layout)
 +}
 +
-+@keyframes ace-pulse {
-+  0%, 100% { opacity: 1; }
-+  50% { opacity: 0.55; }
++export interface AceDryPreset {
++  id: string;
++  label: string;
++  temp: number;
++  minutes: number;
++  materials: string[];
 +}
-+</style>
++
++// Drying presets. The ACE heater tops out at 65 °C, so nothing here goes above it.
++export const ACE_DRY_PRESETS: AceDryPreset[] = [
++  { id: 'pla', label: 'PLA', temp: 45, minutes: 240, materials: ['PLA', 'PLA+', 'PLA-CF', 'PVA'] },
++  { id: 'petg', label: 'PETG', temp: 55, minutes: 360, materials: ['PETG', 'PETG-CF'] },
++  { id: 'abs', label: 'ABS / ASA', temp: 65, minutes: 360, materials: ['ABS', 'ASA', 'HIPS', 'PC'] },
++  { id: 'tpu', label: 'TPU', temp: 50, minutes: 360, materials: ['TPU'] },
++  { id: 'pa', label: 'Nylon (PA)', temp: 65, minutes: 480, materials: ['PA', 'PA-CF', 'NYLON'] }
++]
++
++export const dryPresetFor = (material: string | undefined): AceDryPreset | undefined => {
++  const key = (material ?? '').toUpperCase().replace(/[\s_]+/g, '')
++
++  return ACE_DRY_PRESETS.find(preset => preset.materials.includes(key))
++}
++
++export const formatMinutes = (minutes: number): string => {
++  if (minutes < 60) return `${minutes} min`
++
++  const hours = Math.floor(minutes / 60)
++  const rest = minutes % 60
++
++  return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`
++}
++
++export interface AceSavedMapping {
++  name: string;
++  map: Record<number, number>;
++}
++
++export const loadMapPresets = (): AceSavedMapping[] => {
++  try {
++    const parsed: unknown = JSON.parse(readStorage(MAP_PRESETS_KEY) ?? '[]')
++
++    return Array.isArray(parsed)
++      ? parsed.filter((item): item is AceSavedMapping =>
++        item != null && typeof item.name === 'string' && typeof item.map === 'object')
++      : []
++  } catch {
++    return []
++  }
++}
++
++export const saveMapPresets = (presets: AceSavedMapping[]) => {
++  writeStorage(MAP_PRESETS_KEY, JSON.stringify(presets))
++}
++
++export const loadFileMapping = (filename: string): Record<number, number> | undefined => {
++  try {
++    const parsed: unknown = JSON.parse(readStorage(MAP_FILE_PREFIX + filename) ?? 'null')
++
++    return parsed != null && typeof parsed === 'object' ? parsed as Record<number, number> : undefined
++  } catch {
++    return undefined
++  }
++}
++
++export const saveFileMapping = (filename: string, map: Record<number, number>) => {
++  writeStorage(MAP_FILE_PREFIX + filename, JSON.stringify(map))
++}
 diff --git a/src/components/widgets/acepro/acepro.ts b/src/components/widgets/acepro/acepro.ts
 new file mode 100644
-index 0000000..03486a2
+index 0000000..b0076ca
 --- /dev/null
 +++ b/src/components/widgets/acepro/acepro.ts
-@@ -0,0 +1,172 @@
+@@ -0,0 +1,185 @@
 +import { Component, Mixins } from 'vue-property-decorator'
 +import StateMixin from '@/mixins/state'
 +import type {
@@ -1946,6 +4299,19 @@ index 0000000..03486a2
 +    return slot.custom_name || slot.material || (this.aceSlotIsEmpty(slot) ? '' : 'Unknown')
 +  }
 +
++  /** Every slot of every unit as a flat list (tool order). */
++  get aceAllSlots (): Array<{ unit: AceUnit, slot: AceSlotState }> {
++    return this.aceUnits.flatMap(unit => this.aceUnitSlots(unit).map(slot => ({ unit, slot })))
++  }
++
++  get aceToolchangeActive (): boolean {
++    return this.aceManager?.toolchange_in_progress === true
++  }
++
++  get aceCanMove (): boolean {
++    return this.klippyReady && this.aceEnabled && !this.aceIsPrinting
++  }
++
 +  aceSendGcode (gcode: string) {
 +    this.sendGcode(gcode)
 +  }
@@ -1970,10 +4336,10 @@ index 0000000..84b3f38
 +}
 diff --git a/src/components/widgets/acepro/types.ts b/src/components/widgets/acepro/types.ts
 new file mode 100644
-index 0000000..6c6450e
+index 0000000..5e89783
 --- /dev/null
 +++ b/src/components/widgets/acepro/types.ts
-@@ -0,0 +1,61 @@
+@@ -0,0 +1,71 @@
 +// Status shapes published by the acepro-any-klipper driver.
 +// `ace` is the manager object; each unit is `ace_instance_<n>`.
 +
@@ -1988,6 +4354,16 @@ index 0000000..6c6450e
 +  tool_map?: Record<string, number>;
 +  tool_map_file?: string;
 +  tool_map_active?: boolean;
++  target_index?: number;
++  toolchange_in_progress?: boolean;
++  endless_chain?: Record<string, number[]>;
++  stats?: AceStats;
++}
++
++export interface AceStats {
++  tool_changes?: number;
++  purge_mm?: number;
++  cuts?: number;
 +}
 +
 +export type AceEndlessSpoolMode = 'exact' | 'material' | 'next'
@@ -2091,6 +4467,23 @@ index 4f36019..75b1be4 100644
      if (this.$typedState.printer.printer.mmu?.enabled === true) {
        if (fileWithMeta != null && 'referenced_tools' in fileWithMeta) {
          const mmuPrint = (fileWithMeta.referenced_tools?.length ?? 1) > 1 || this.$typedState.printer.printer.mmu.gate !== -2
+diff --git a/src/router/index.ts b/src/router/index.ts
+index 32bf446..d833a09 100644
+--- a/src/router/index.ts
++++ b/src/router/index.ts
+@@ -49,6 +49,12 @@ const routes: Array<RouteConfig> = [
+       dashboard: true
+     }
+   },
++  {
++    path: '/ace',
++    name: 'ace',
++    component: () => import('@/views/Ace.vue'),
++    ...defaultRouteConfig
++  },
+   {
+     path: '/timelapse',
+     name: 'timelapse',
 diff --git a/src/store/layout/state.ts b/src/store/layout/state.ts
 index 36e57ac..83d761e 100644
 --- a/src/store/layout/state.ts
@@ -2103,6 +4496,249 @@ index 36e57ac..83d761e 100644
            { id: 'camera-card', enabled: true, collapsed: false },
            { id: 'toolhead-card', enabled: true, collapsed: false },
            { id: 'macros-card', enabled: true, collapsed: false },
+diff --git a/src/views/Ace.vue b/src/views/Ace.vue
+new file mode 100644
+index 0000000..3417e60
+--- /dev/null
++++ b/src/views/Ace.vue
+@@ -0,0 +1,237 @@
++<template>
++  <v-row :dense="$vuetify.breakpoint.smAndDown">
++    <v-col
++      cols="12"
++      md="7"
++    >
++      <collapsable-card
++        title="ACE Pro spools"
++        icon="$mmu"
++      >
++        <template #menu>
++          <ace-pro-settings-menu />
++        </template>
++
++        <v-card-text class="pt-1">
++          <ace-pro-progress />
++          <div class="d-flex flex-wrap align-center mb-2">
++            <v-chip
++              small
++              label
++              :color="aceCurrentTool >= 0 ? 'primary' : undefined"
++              class="mr-1 mb-1"
++            >
++              {{ aceCurrentTool >= 0 ? `T${aceCurrentTool} loaded` : 'No tool loaded' }}
++            </v-chip>
++            <v-chip
++              v-if="toolMapText"
++              small
++              label
++              outlined
++              color="primary"
++              class="mr-1 mb-1"
++            >
++              Spools: {{ toolMapText }}
++            </v-chip>
++          </div>
++          <v-row dense>
++            <v-col
++              v-for="unit in aceUnits"
++              :key="`ace-page-unit:${unit.index}`"
++              cols="12"
++              :lg="aceUnits.length > 1 ? 6 : 12"
++            >
++              <ace-pro-rack-unit
++                :unit="unit"
++                @slot-click="openSlotEntry"
++              />
++            </v-col>
++          </v-row>
++        </v-card-text>
++      </collapsable-card>
++    </v-col>
++
++    <v-col
++      cols="12"
++      md="5"
++    >
++      <collapsable-card
++        title="Health and counters"
++        icon="$mmu"
++        class="mb-2 mb-md-4"
++      >
++        <v-card-text>
++          <ace-pro-health />
++        </v-card-text>
++      </collapsable-card>
++
++      <collapsable-card
++        title="Endless spool"
++        icon="$mmu"
++        class="mb-2 mb-md-4"
++      >
++        <v-card-text>
++          <div class="d-flex align-center mb-2">
++            <v-chip
++              small
++              label
++              :color="endlessOn ? 'success' : undefined"
++            >
++              {{ endlessOn ? `On · ${endlessMode}` : 'Off' }}
++            </v-chip>
++          </div>
++          <div
++            v-if="chains.length === 0"
++            class="text-caption secondary--text"
++          >
++            No chains set. The match mode picks the next spool. Open a slot to set a takeover order.
++          </div>
++          <div
++            v-for="chain in chains"
++            :key="`chain:${chain.tool}`"
++            class="d-flex align-center mb-1"
++          >
++            <v-chip
++              small
++              label
++              class="mr-2"
++            >
++              T{{ chain.tool }}
++            </v-chip>
++            <v-icon small>
++              $chevronRight
++            </v-icon>
++            <v-chip
++              v-for="next in chain.next"
++              :key="`chain:${chain.tool}:${next}`"
++              small
++              label
++              outlined
++              class="ml-1"
++            >
++              T{{ next }}
++            </v-chip>
++          </div>
++        </v-card-text>
++      </collapsable-card>
++
++      <collapsable-card
++        title="Cutter and basket"
++        icon="$mmu"
++      >
++        <v-card-text class="d-flex flex-wrap ace-page-actions">
++          <app-btn
++            small
++            outlined
++            @click="aceUi.cutterWizard = true"
++          >
++            Calibrate the cutter
++          </app-btn>
++          <app-btn
++            small
++            outlined
++            :disabled="!aceCanMove"
++            @click="testCutter"
++          >
++            Test the cutter
++          </app-btn>
++          <app-btn
++            small
++            outlined
++            :disabled="!aceCanMove"
++            @click="aceSendGcode('SERVO_TEST ANGLE=90')"
++          >
++            Basket open
++          </app-btn>
++          <app-btn
++            small
++            outlined
++            :disabled="!aceCanMove"
++            @click="aceSendGcode('SERVO_TEST ANGLE=0')"
++          >
++            Basket close
++          </app-btn>
++        </v-card-text>
++      </collapsable-card>
++    </v-col>
++
++    <ace-pro-slot-dialog
++      v-if="dialog.open"
++      v-model="dialog.open"
++      :unit-index="dialog.unit"
++      :slot-index="dialog.slot"
++    />
++    <ace-cutter-wizard
++      v-if="aceUi.cutterWizard"
++      v-model="aceUi.cutterWizard"
++    />
++  </v-row>
++</template>
++
++<script lang="ts">
++import { Component, Mixins } from 'vue-property-decorator'
++import AceProMixin from '@/components/widgets/acepro/acepro'
++import AceProRackUnit from '@/components/widgets/acepro/AceProRackUnit.vue'
++import AceProProgress from '@/components/widgets/acepro/AceProProgress.vue'
++import AceProHealth from '@/components/widgets/acepro/AceProHealth.vue'
++import AceProSlotDialog from '@/components/widgets/acepro/AceProSlotDialog.vue'
++import AceCutterWizard from '@/components/widgets/acepro/AceCutterWizard.vue'
++import AceProSettingsMenu from '@/components/widgets/acepro/AceProSettingsMenu.vue'
++import { aceUi } from '@/components/widgets/acepro/aceUi'
++
++@Component({
++  components: {
++    AceProRackUnit,
++    AceProProgress,
++    AceProHealth,
++    AceProSlotDialog,
++    AceCutterWizard,
++    AceProSettingsMenu
++  }
++})
++export default class Ace extends Mixins(AceProMixin) {
++  readonly aceUi = aceUi
++
++  dialog = { open: false, unit: 0, slot: 0 }
++
++  get endlessOn (): boolean {
++    return this.aceManager?.endless_spool_enabled === true
++  }
++
++  get endlessMode (): string {
++    return this.aceManager?.endless_spool_match_mode ?? 'exact'
++  }
++
++  get chains (): Array<{ tool: number, next: number[] }> {
++    return Object.entries(this.aceManager?.endless_chain ?? {})
++      .map(([tool, next]) => ({ tool: Number(tool), next }))
++      .sort((a, b) => a.tool - b.tool)
++  }
++
++  get toolMapText (): string {
++    return Object.entries(this.aceManager?.tool_map ?? {})
++      .map(([from, to]) => `T${from}→T${to}`)
++      .join(', ')
++  }
++
++  openSlotEntry (entry: { unit: number, slot: number }) {
++    this.dialog = { open: true, unit: entry.unit, slot: entry.slot }
++  }
++
++  async testCutter () {
++    const result = await this.$confirm('Move the toolhead to the cutter and cut the filament now?', {
++      title: 'Test the cutter',
++      color: 'card-heading',
++      icon: '$error'
++    })
++
++    if (result) this.aceSendGcode('CUT_TIP')
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++.ace-page-actions > * {
++  margin: 0 6px 6px 0;
++}
++</style>
 diff --git a/src/views/Dashboard.vue b/src/views/Dashboard.vue
 index a01c43f..37f59c8 100644
 --- a/src/views/Dashboard.vue

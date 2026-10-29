@@ -48,10 +48,11 @@ Tuned and tested on a **Creality K1 Max** (Raspberry Pi 5, Kalico, Fluidd, Klipp
 | **Filament cutter** | `CUT_TIP` with a step-by-step calibration (`cut_calibrate.cfg`). |
 | **Servo poop basket** | Deploys for heating, purging and wiping, then retracts. |
 | **Spool mapping at print start** | Pick which physical spool prints each sliced filament. No re-slicing. |
-| **Fluidd panel** | An ACE card on the dashboard and a "Choose ACE spools" window when you press Print. |
+| **Fluidd panel** | An ACE card with four layouts, a tool-change progress bar, dryer presets, a cutter wizard, counters and a "Choose ACE spools" window at print start ([section 7](#7-fluidd-ace-panel)). |
 | **OrcaSlicer plugin** | The same choice inside Orca, written into the G-code when you send it. |
 | **KlipperScreen panel** | Slots, load/unload, dryer and endless spool from the touchscreen. |
-| **Endless spool** | Switches to a matching spool when one runs out. |
+| **Endless spool** | Switches to a matching spool when one runs out, or to the spools you list for that tool in order. |
+| **Counters** | Tool changes, filament cuts and purged filament, shown in Fluidd. |
 | **Moonraker `lane_data` sync** | Orca sees the loaded filament types and colours. |
 | **RFID sync** | Reads material, colour and temperature from the ACE tags. |
 | **Safety** | Connection supervision, runout and tangle handling, recovery after a failed load. |
@@ -376,7 +377,7 @@ Three ways to set it, in order of convenience:
 | Where | How |
 |---|---|
 | **OrcaSlicer** | The ACE Spools panel (section 5.3). The line is written into the G-code you send. |
-| **Fluidd** | Press **Print** (or **Re-print**) on a file and the **Choose ACE spools** window opens. |
+| **Fluidd** | Press **Print** (or **Re-print**) on a file and the **Choose ACE spools** window opens ([details](#choose-ace-spools-window)). |
 | **Console** | `ACE_SET_TOOL_MAP` by hand. |
 
 A choice made later in Fluidd wins over the one from Orca (`KEEP_EXISTING=1`).
@@ -400,10 +401,65 @@ The slicer preset name of a slot can be stored with `ACE_SET_SLOT … FILAMENT_S
 
 ## 7. Fluidd ACE panel
 
-A build of Fluidd v1.37.7 with two additions:
+A build of Fluidd v1.37.7 with an ACE Pro card on the dashboard, a full ACE page (**ACE Pro** in the side menu, or `#/ace`) and a **Choose ACE spools** window at print start.
 
-- **ACE Pro card** on the dashboard: every unit and slot (colour, material, temperature, RFID), load/unload, feed/retract, slot editing, dryer, endless spool and the ACE on/off switch.
-- **Choose ACE spools** window when you press Print or Re-print.
+<div align="center">
+<img src="docs/img/fluidd-ace-card.png" alt="ACE Pro card, cards layout" width="48%">
+<img src="docs/img/fluidd-toolchange-progress.png" alt="Tool change progress" width="48%"><br>
+<em>Left: the card with two units. Right: the progress bar during a tool change (demo data).</em>
+</div>
+
+### What it does
+
+| Feature | Details |
+|---|---|
+| **Four layouts** | Switch in the card header: **Cards** (every slot as a spool), **Compact strip** (one row of dots, click one for details), **Spool rack** (rows with the feed tube drawn) and **Table**. The choice is remembered. |
+| **Slots** | Colour, material, temperature, RFID mark, load/unload, feed and retract, edit, mark empty. |
+| **Slot window** | Material, print temperature, colour, an optional slicer preset name (sent to OrcaSlicer), and the endless spool order for that tool. |
+| **Tool-change progress** | While `T<n>` runs the card shows from/to tool and the stage: retract and cut, unload, load, purge and wipe. |
+| **Dryer** | Start and stop per unit, with presets by material (PLA, PETG, ABS, TPU…). |
+| **Endless spool** | On/off, match mode, and a per-tool order ("take over with T4, then T5"). The order is used first; the match mode applies when none of them is ready. |
+| **Cutter wizard** | **Cutter calibration…** in the cog menu walks through finding `cut_full_x` and shows the lever position live ([section 9](#9-calibrate-the-filament-cutter)). |
+| **Health and counters** | Connection, firmware, port and chamber temperature per unit, plus tool changes, filament cuts and purged filament. Counters can be reset. |
+| **Quick actions** | ACE on/off, RFID sync, smart load/unload, reconnect units, unload all, test the cutter. |
+
+<div align="center">
+<img src="docs/img/fluidd-layout-strip.png" alt="Compact strip layout" width="48%">
+<img src="docs/img/fluidd-layout-rack.png" alt="Spool rack layout" width="48%"><br>
+<img src="docs/img/fluidd-layout-table.png" alt="Table layout" width="48%">
+<img src="docs/img/fluidd-menu.png" alt="Settings menu" width="48%"><br>
+<em>Compact strip (with a slot selected and the dryers open), spool rack, table, and the cog menu.</em>
+</div>
+
+<div align="center">
+<img src="docs/img/fluidd-slot-dialog.png" alt="Slot window" width="31%">
+<img src="docs/img/fluidd-cutter-wizard.png" alt="Cutter wizard" width="31%">
+<img src="docs/img/fluidd-health.png" alt="Health and counters" width="31%"><br>
+<em>Slot window with the endless spool order, the cutter wizard, and health and counters.</em>
+</div>
+
+### Choose ACE spools window
+
+Press **Print** (file browser) or **Re-print** and this window opens. It sends `ACE_SET_TOOL_MAP` and then starts the print.
+
+- **Auto-match** picks the spool whose **colour is closest** to the sliced colour first. The filament type only decides between spools of about the same colour. A spool is never used for two filaments if another fits.
+- **List** and **Map** views. The map draws a line from each sliced filament to its spool; dotted lines need a look.
+- **Warnings** when the type differs (sliced for PETG, spool is ABS), the colour is far off, the same spool is used twice, or the spool is empty.
+- Drag the handle on a row to swap two spools. The purge estimate shows how much filament the tool changes will use.
+- **Saved mappings** keep a choice by name so you can reuse it.
+- **Dry spools first…** starts the dryer with a preset for the spools you picked.
+- **Print as sliced** skips the mapping.
+
+<div align="center">
+<img src="docs/img/fluidd-choose-spools-changed.png" alt="Picker with warnings" width="48%">
+<img src="docs/img/fluidd-picker-map.png" alt="Picker map view" width="48%"><br>
+<em>Warnings after choosing an ABS spool for a PETG filament, and the map view.</em>
+</div>
+
+<div align="center">
+<img src="docs/img/fluidd-ace-page.png" alt="Full ACE page" width="80%"><br>
+<em>The full ACE page: spools, health and counters, endless spool order, cutter and basket tests.</em>
+</div>
 
 ### Install the ready-made build
 
@@ -420,6 +476,8 @@ cp ~/fluidd_backup/config.json ~/fluidd/ 2>/dev/null   # keep your Fluidd settin
 Hard-refresh the browser. If the card is missing, open the dashboard layout editor and add **ACE Pro**.
 
 The card expects the switches `[output_pin endless_spool]` and `[output_pin ACE_Pro]`, which `acepro_setting.cfg` defines. Moonraker must have `[ace_status]` enabled (the installer adds it).
+
+The counters and endless spool order need the updated driver and `acepro.cfg` from this repo (`CUT_TIP` calls `ACE_COUNT_CUT`). Without them the panel still works, but those two parts stay empty.
 
 ### Build it yourself
 
@@ -511,6 +569,8 @@ The cut itself does a pre-cut retract (`pre_cut_retract_length`, 2 mm, done in r
 | `ACE_RECONNECT` / `ACE_REDETECT` | Reconnect or rescan the units |
 | `ACE_GET_CONNECTION_STATUS` | Connection stability per unit |
 | `ACE_DEBUG_SENSORS` | Show sensor states |
+| `ACE_SET_ENDLESS_CHAIN` / `ACE_GET_ENDLESS_CHAIN` | Endless spool takeover order per tool (section 11) |
+| `ACE_RESET_STATS [WHAT=cuts\|tool_changes\|purge_mm]` | Reset the counters shown in Fluidd |
 | `CUT_TIP`, `FLUSH_POOP`, `SERVO_TEST ANGLE=90` | Hardware tests |
 
 All commands with examples: [`example_cmds.txt`](example_cmds.txt). Architecture: [`ARCHITECTURE.md`](ARCHITECTURE.md). Serial protocol: [`PROTOCOL.md`](PROTOCOL.md).
@@ -538,6 +598,19 @@ When a runout is detected, the driver finds a compatible spool and switches to i
 | `next` | First ready spool in order |
 
 Spools with no material label are `Unknown` and **never** match each other. Label spools with `ACE_SET_SLOT` for safe endless spool.
+
+### Takeover order per tool
+
+You can also say exactly which spools take over, in order. The order is tried first; if none of them is ready, the match mode above applies.
+
+| Command | What it does |
+|---|---|
+| `ACE_SET_ENDLESS_CHAIN TOOL=0 NEXT=4,5` | When T0 runs out, use T4, then T5 |
+| `ACE_SET_ENDLESS_CHAIN TOOL=0 NEXT=` | Remove the order for T0 |
+| `ACE_GET_ENDLESS_CHAIN` | Show all orders |
+| `ACE_CLEAR_ENDLESS_CHAIN [TOOL=<n>]` | Remove all orders, or one |
+
+Orders are saved and also set from the slot window in Fluidd.
 
 ---
 
@@ -577,7 +650,9 @@ The driver, KlipperScreen panel and Moonraker plugin follow [Kobra-S1/ACEPRO](ht
 - KlipperScreen: wrong temperature with more than one ACE fixed; scroll and small-screen fixes.
 - Two macro fixes: the pre-cut retract runs in relative mode, and `RESUME` reloads the tool of an unfinished change.
 
-Added in this fork: spool mapping (`tool_map.py`), the preset name in `ACE_SET_SLOT` and `lane_data`, the Fluidd panel, the Orca plugin and the cutter calibration.
+Added in this fork: spool mapping (`tool_map.py`), the preset name in `ACE_SET_SLOT` and `lane_data`, the Fluidd panel (layouts, progress, dryer presets, counters, cutter wizard), endless spool order per tool, usage counters (`ACE_COUNT_CUT` in `CUT_TIP`), the Orca plugin and the cutter calibration.
+
+> If you update `acepro.cfg` by hand, add `ACE_COUNT_CUT` to `CUT_TIP` just before `RESTORE_GCODE_STATE NAME=cut_tip_state`, or the cut counter stays at zero.
 
 Behaviour changes to know: `feed_assist_off_when_idle` and `stop_ace_on_shutdown` now default to **on**. Add `feed_assist_off_when_idle: False` to `[ace]` for the old behaviour.
 
@@ -636,7 +711,7 @@ acepro-any-klipper/
 │   ├── acepro_printer_macros.cfg PAUSE / RESUME / MY_START_PRINT
 │   ├── cut_calibrate.cfg         Cutter calibration
 │   └── spoolman_logic.cfg        Optional Spoolman helpers
-├── fluidd/                       Fluidd 1.37.7 build + patch (ACE card, spool picker)
+├── fluidd/                       Fluidd 1.37.7 build + patch (ACE panel, spool picker)
 ├── orca_plugin/                  OrcaSlicer 2.5 "ACE Spool Mapper"
 ├── KlipperScreen/acepro.py       KlipperScreen panel
 ├── acepro-mmu-dashboard/         Moonraker ace_status plugin and web dashboard
