@@ -62,7 +62,7 @@ index 669378b..307554a 100644
    }
 diff --git a/src/components/widgets/acepro/AceCutterWizard.vue b/src/components/widgets/acepro/AceCutterWizard.vue
 new file mode 100644
-index 0000000..f0c992b
+index 0000000..5945ca9
 --- /dev/null
 +++ b/src/components/widgets/acepro/AceCutterWizard.vue
 @@ -0,0 +1,218 @@
@@ -79,7 +79,7 @@ index 0000000..f0c992b
 +        dense
 +        text
 +        type="warning"
-+        class="text-caption"
++        class="text-body-2"
 +      >
 +        The calibration macros are not loaded. Add <code>[include cut_calibrate.cfg]</code> to
 +        <code>printer.cfg</code> and restart Klipper.
@@ -89,7 +89,7 @@ index 0000000..f0c992b
 +        dense
 +        text
 +        type="info"
-+        class="text-caption"
++        class="text-body-2"
 +      >
 +        Calibration is locked while a print is running.
 +      </v-alert>
@@ -102,7 +102,7 @@ index 0000000..f0c992b
 +      <div class="ace-cutter rounded pa-3 mb-3">
 +        <div class="d-flex align-center">
 +          <div>
-+            <div class="text-caption secondary--text">
++            <div class="text-body-2">
 +              Toolhead X
 +            </div>
 +            <div class="text-h5">
@@ -110,7 +110,7 @@ index 0000000..f0c992b
 +            </div>
 +          </div>
 +          <v-spacer />
-+          <div class="text-right text-caption">
++          <div class="text-right text-body-2">
 +            <div>engage <b>{{ engageX == null ? '--' : engageX }}</b></div>
 +            <div>limit <b>{{ fullX == null ? '--' : fullX }}</b></div>
 +          </div>
@@ -122,7 +122,7 @@ index 0000000..f0c992b
 +          class="mt-2"
 +          :color="progress > 90 ? 'error' : 'primary'"
 +        />
-+        <div class="d-flex text-caption secondary--text mt-1">
++        <div class="d-flex text-body-2 mt-1">
 +          <span>lever untouched</span>
 +          <v-spacer />
 +          <span>cut_full_x</span>
@@ -171,7 +171,7 @@ index 0000000..f0c992b
 +      </div>
 +      <div class="d-flex align-center flex-wrap">
 +        <app-btn
-+          x-small
++          small
 +          outlined
 +          class="mr-2"
 +          :disabled="currentX == null"
@@ -181,7 +181,7 @@ index 0000000..f0c992b
 +        </app-btn>
 +        <span class="text-body-2 mr-4">{{ touchX == null ? '--' : touchX.toFixed(2) }}</span>
 +        <app-btn
-+          x-small
++          small
 +          outlined
 +          class="mr-2"
 +          :disabled="currentX == null"
@@ -202,7 +202,7 @@ index 0000000..f0c992b
 +          Use {{ bottomX == null ? '…' : bottomX.toFixed(2) }} as cut_full_x
 +        </app-btn>
 +      </div>
-+      <div class="text-caption secondary--text mt-1">
++      <div class="text-body-2 mt-1">
 +        This applies until Klipper restarts. To keep it, set <code>variable_cut_full_x</code> in
 +        <code>acepro_macros.cfg</code> to the same value.
 +      </div>
@@ -286,10 +286,10 @@ index 0000000..f0c992b
 +</style>
 diff --git a/src/components/widgets/acepro/AceMappingView.vue b/src/components/widgets/acepro/AceMappingView.vue
 new file mode 100644
-index 0000000..badeaed
+index 0000000..2e2da7d
 --- /dev/null
 +++ b/src/components/widgets/acepro/AceMappingView.vue
-@@ -0,0 +1,240 @@
+@@ -0,0 +1,237 @@
 +<template>
 +  <div class="ace-map">
 +    <svg
@@ -377,9 +377,9 @@ index 0000000..badeaed
 +        @keydown.enter="pick(slot)"
 +      >
 +        <rect
-+          x="340"
++          x="300"
 +          :y="slotY(index) - 14"
-+          width="212"
++          width="252"
 +          height="28"
 +          rx="7"
 +          class="ace-map__box"
@@ -393,7 +393,7 @@ index 0000000..badeaed
 +          :stroke-dasharray="slot.disabled ? '3 2' : undefined"
 +        />
 +        <text
-+          x="350"
++          x="310"
 +          :y="slotY(index) + 4"
 +          class="ace-map__label"
 +        >
@@ -401,7 +401,7 @@ index 0000000..badeaed
 +        </text>
 +      </g>
 +    </svg>
-+    <div class="text-caption secondary--text">
++    <div class="text-body-2">
 +      Click a filament, then click the spool that should print it. Dotted lines need your attention.
 +    </div>
 +  </div>
@@ -464,7 +464,7 @@ index 0000000..badeaed
 +    const y1 = this.rowY(from)
 +    const y2 = this.slotY(to)
 +
-+    return `M220 ${y1} C 280 ${y1}, 280 ${y2}, 340 ${y2}`
++    return `M220 ${y1} C 260 ${y1}, 260 ${y2}, 300 ${y2}`
 +  }
 +
 +  pick (slot: MapSlot) {
@@ -483,9 +483,8 @@ index 0000000..badeaed
 +}
 +
 +.ace-map__head {
-+  font-size: 11px;
++  font-size: 12px;
 +  fill: currentColor;
-+  opacity: 0.6;
 +  text-transform: uppercase;
 +}
 +
@@ -515,7 +514,6 @@ index 0000000..badeaed
 +
 +.ace-map__node--disabled {
 +  cursor: default;
-+  opacity: 0.45;
 +}
 +
 +.ace-map__label {
@@ -525,22 +523,21 @@ index 0000000..badeaed
 +}
 +
 +.ace-map__small {
-+  font-size: 10px;
++  font-size: 11px;
 +  fill: currentColor;
-+  opacity: 0.65;
 +}
 +</style>
 diff --git a/src/components/widgets/acepro/AcePrintStartDialog.vue b/src/components/widgets/acepro/AcePrintStartDialog.vue
 new file mode 100644
-index 0000000..2494b18
+index 0000000..6b9ddc1
 --- /dev/null
 +++ b/src/components/widgets/acepro/AcePrintStartDialog.vue
-@@ -0,0 +1,826 @@
+@@ -0,0 +1,829 @@
 +<template>
 +  <app-dialog
 +    v-model="open"
 +    title="Choose ACE spools"
-+    width="620"
++    :width="view === 'map' ? 980 : 720"
 +    @save="startPrint(true)"
 +  >
 +    <div
@@ -558,7 +555,7 @@ index 0000000..2494b18
 +      <div class="text-body-2 text-truncate">
 +        {{ shortFilename }}
 +      </div>
-+      <div class="text-caption secondary--text">
++      <div class="text-body-2">
 +        Pick which ACE spool prints each filament from the slicer. Best matches are preselected.
 +      </div>
 +    </v-card-text>
@@ -593,8 +590,9 @@ index 0000000..2494b18
 +      >
 +        <template #activator="{ on, attrs }">
 +          <app-btn
-+            x-small
++            small
 +            outlined
++            color="primary"
 +            class="mr-2"
 +            v-bind="attrs"
 +            v-on="on"
@@ -632,7 +630,7 @@ index 0000000..2494b18
 +            </v-list-item-action>
 +          </v-list-item>
 +          <v-list-item v-if="presets.length === 0">
-+            <v-list-item-title class="secondary--text text-caption">
++            <v-list-item-title class="text-body-2">
 +              Nothing saved yet
 +            </v-list-item-title>
 +          </v-list-item>
@@ -661,8 +659,9 @@ index 0000000..2494b18
 +      </v-menu>
 +
 +      <app-btn
-+        x-small
++        small
 +        text
++        color="primary"
 +        title="Pick the best spool for every filament again"
 +        @click="autoMatch"
 +      >
@@ -731,7 +730,7 @@ index 0000000..2494b18
 +            <div class="text-body-2 font-weight-bold">
 +              T{{ row.tool }} · {{ row.type || 'Filament' }}
 +            </div>
-+            <div class="text-caption secondary--text text-truncate">
++            <div class="text-body-2 text-truncate">
 +              {{ row.name || (row.color ? row.color.toUpperCase() : '') }}
 +              <template v-if="row.weight">
 +                · {{ row.weight }} g
@@ -780,7 +779,7 @@ index 0000000..2494b18
 +          <div
 +            v-for="warning in rowWarnings(row)"
 +            :key="`warn:${row.tool}:${warning}`"
-+            class="text-caption warning--text mt-1"
++            class="text-body-2 warning--text mt-1"
 +          >
 +            <v-icon
 +              x-small
@@ -795,7 +794,7 @@ index 0000000..2494b18
 +
 +      <div
 +        v-if="warningCount > 0 || purgeText"
-+        class="px-4 py-2 text-caption ace-summary"
++        class="px-4 py-2 text-body-2 ace-summary"
 +      >
 +        <span
 +          v-if="warningCount > 0"
@@ -809,7 +808,7 @@ index 0000000..2494b18
 +        </span>
 +        <span
 +          v-if="purgeText"
-+          class="secondary--text"
++          class=""
 +        >{{ purgeText }}</span>
 +      </div>
 +
@@ -834,6 +833,7 @@ index 0000000..2494b18
 +      </app-btn>
 +      <app-btn
 +        text
++        color="primary"
 +        :disabled="!metadataLoaded || dryPlan.length === 0"
 +        title="Dry the ACE units that hold these spools, then print when they are done"
 +        @click="dryFirst"
@@ -1677,25 +1677,24 @@ index 0000000..b62297a
 +</style>
 diff --git a/src/components/widgets/acepro/AceProDryer.vue b/src/components/widgets/acepro/AceProDryer.vue
 new file mode 100644
-index 0000000..b9c1d58
+index 0000000..bd8cf9f
 --- /dev/null
 +++ b/src/components/widgets/acepro/AceProDryer.vue
 @@ -0,0 +1,212 @@
 +<template>
 +  <div class="d-flex align-center flex-wrap ace-dryer">
 +    <v-icon
-+      small
-+      class="mr-1"
++      class="mr-2"
 +      :color="drying ? 'orange' : undefined"
 +    >
 +      $fan
 +    </v-icon>
 +    <span
 +      v-if="!compact"
-+      class="text-body-2 mr-2"
++      class="text-subtitle-1 font-weight-medium mr-2"
 +    >Dryer</span>
 +    <v-chip
-+      x-small
++      small
 +      label
 +      :color="drying ? 'orange' : undefined"
 +      :class="{ 'ace-pulse': drying }"
@@ -1712,8 +1711,9 @@ index 0000000..b9c1d58
 +      >
 +        <template #activator="{ on, attrs }">
 +          <app-btn
-+            x-small
++            small
 +            outlined
++            color="primary"
 +            class="mr-1"
 +            :disabled="!canUse"
 +            v-bind="attrs"
@@ -1736,7 +1736,7 @@ index 0000000..b9c1d58
 +          >
 +            <v-list-item-title>
 +              {{ preset.label }}
-+              <span class="secondary--text text-caption ml-1">
++              <span class="text-body-2 ml-1">
 +                {{ preset.temp }}°C · {{ formatMinutes(preset.minutes) }}
 +              </span>
 +              <v-chip
@@ -1773,7 +1773,7 @@ index 0000000..b9c1d58
 +    </template>
 +
 +    <app-btn
-+      x-small
++      small
 +      :color="drying ? 'error' : 'primary'"
 +      :disabled="!canUse"
 +      @click="toggleDryer"
@@ -1872,16 +1872,16 @@ index 0000000..b9c1d58
 +
 +<style lang="scss" scoped>
 +.ace-compact-select {
-+  max-width: 96px;
-+  font-size: 0.8rem;
++  max-width: 124px;
++  font-size: 1rem;
 +}
 +
 +.ace-compact-select :deep(.v-input__slot) {
-+  min-height: 28px !important;
++  min-height: 40px !important;
 +}
 +
 +.ace-compact-select :deep(.v-input__append-inner) {
-+  margin-top: 2px !important;
++  margin-top: 6px !important;
 +}
 +
 +.ace-pulse {
@@ -1890,12 +1890,12 @@ index 0000000..b9c1d58
 +
 +@keyframes ace-pulse {
 +  0%, 100% { opacity: 1; }
-+  50% { opacity: 0.55; }
++  50% { opacity: 0.8; }
 +}
 +</style>
 diff --git a/src/components/widgets/acepro/AceProHealth.vue b/src/components/widgets/acepro/AceProHealth.vue
 new file mode 100644
-index 0000000..be6e437
+index 0000000..80abc6c
 --- /dev/null
 +++ b/src/components/widgets/acepro/AceProHealth.vue
 @@ -0,0 +1,185 @@
@@ -1935,10 +1935,10 @@ index 0000000..be6e437
 +            </v-chip>
 +          </td>
 +          <td>{{ unit.state.firmware || '–' }}</td>
-+          <td class="text-caption">
++          <td class="text-body-2">
 +            {{ unit.state.usb_port || '–' }}
 +          </td>
-+          <td class="text-caption">
++          <td class="text-body-2">
 +            {{ unit.state.protocol || '–' }}
 +          </td>
 +          <td>{{ unit.state.rfid_sync_enabled ? 'on' : 'off' }}</td>
@@ -1947,7 +1947,7 @@ index 0000000..be6e437
 +          </td>
 +          <td class="text-right text-no-wrap">
 +            <app-btn
-+              x-small
++              small
 +              text
 +              :disabled="!klippyReady || !aceEnabled"
 +              @click="aceSendGcode(`ACE_RECONNECT INSTANCE=${unit.index}`)"
@@ -1960,7 +1960,7 @@ index 0000000..be6e437
 +    </v-simple-table>
 +    <div class="mt-2">
 +      <app-btn
-+        x-small
++        small
 +        outlined
 +        :disabled="!klippyReady"
 +        @click="aceSendGcode('ACE_GET_CONNECTION_STATUS')"
@@ -1980,7 +1980,7 @@ index 0000000..be6e437
 +        <div class="text-h5">
 +          {{ stats.tool_changes || 0 }}
 +        </div>
-+        <div class="text-caption secondary--text">
++        <div class="text-body-2">
 +          Tool changes
 +        </div>
 +      </v-col>
@@ -1991,7 +1991,7 @@ index 0000000..be6e437
 +        <div class="text-h5">
 +          {{ stats.cuts || 0 }}
 +        </div>
-+        <div class="text-caption secondary--text">
++        <div class="text-body-2">
 +          Filament cuts
 +        </div>
 +      </v-col>
@@ -2002,23 +2002,23 @@ index 0000000..be6e437
 +        <div class="text-h5">
 +          {{ purgeGrams }} g
 +        </div>
-+        <div class="text-caption secondary--text">
++        <div class="text-body-2">
 +          Purged ({{ Math.round((stats.purge_mm || 0) / 10) / 100 }} m)
 +        </div>
 +      </v-col>
 +    </v-row>
-+    <div class="text-caption secondary--text mt-1">
++    <div class="text-body-2 mt-1">
 +      Purge weight assumes 1.75 mm PLA. Counting started when the driver was updated.
 +    </div>
 +    <div
 +      v-if="cutWarning"
-+      class="text-caption warning--text mt-2"
++      class="text-body-2 warning--text mt-2"
 +    >
 +      {{ cutWarning }}
 +    </div>
 +    <div class="mt-2">
 +      <app-btn
-+        x-small
++        small
 +        text
 +        color="error"
 +        :disabled="!klippyReady"
@@ -2117,7 +2117,7 @@ index 0000000..cbb2234
 +</script>
 diff --git a/src/components/widgets/acepro/AceProProgress.vue b/src/components/widgets/acepro/AceProProgress.vue
 new file mode 100644
-index 0000000..59ce6f5
+index 0000000..6d08204
 --- /dev/null
 +++ b/src/components/widgets/acepro/AceProProgress.vue
 @@ -0,0 +1,142 @@
@@ -2157,7 +2157,7 @@ index 0000000..59ce6f5
 +        {{ toLabel }}
 +      </v-chip>
 +      <v-spacer />
-+      <span class="text-caption">{{ stageLabel }}</span>
++      <span class="text-body-2">{{ stageLabel }}</span>
 +    </div>
 +
 +    <div class="d-flex mt-2 ace-steps">
@@ -2168,12 +2168,12 @@ index 0000000..59ce6f5
 +        :class="{ 'ace-step--done': index < stageIndex, 'ace-step--now': index === stageIndex }"
 +      >
 +        <div class="ace-step__bar" />
-+        <div class="text-caption">
++        <div class="text-body-2">
 +          {{ step.label }}
 +        </div>
 +      </div>
 +    </div>
-+    <div class="text-caption secondary--text mt-1">
++    <div class="text-body-2 mt-1">
 +      Estimated from the loaded tool and the filament position.
 +    </div>
 +  </v-alert>
@@ -2230,7 +2230,7 @@ index 0000000..59ce6f5
 +<style lang="scss" scoped>
 +.ace-step {
 +  padding: 0 2px;
-+  opacity: 0.55;
++  opacity: 0.9;
 +}
 +
 +.ace-step__bar {
@@ -2292,31 +2292,31 @@ index 0000000..6ba890e
 +</script>
 diff --git a/src/components/widgets/acepro/AceProRackUnit.vue b/src/components/widgets/acepro/AceProRackUnit.vue
 new file mode 100644
-index 0000000..54eeffc
+index 0000000..f2f666a
 --- /dev/null
 +++ b/src/components/widgets/acepro/AceProRackUnit.vue
-@@ -0,0 +1,217 @@
+@@ -0,0 +1,216 @@
 +<template>
 +  <div class="ace-rack">
 +    <div
-+      class="ace-rack__unit rounded pa-2 mb-3"
++      class="ace-rack__unit rounded pa-3 mb-3"
 +      :class="$vuetify.theme.dark ? 'grey darken-4' : 'grey lighten-4'"
 +    >
 +      <div class="d-flex align-center mb-1">
 +        <span
 +          v-if="aceUnits.length > 1"
-+          class="font-weight-bold mr-2"
++          class="text-h6 mr-2"
 +        >ACE {{ unit.index + 1 }}</span>
 +        <v-chip
-+          x-small
++          small
 +          label
 +          :color="unit.state.connection_state === 'connected' ? 'success' : 'error'"
 +        >
 +          {{ unit.state.connection_state || 'no data' }}
 +        </v-chip>
 +        <v-spacer />
-+        <span class="text-caption">
-+          <v-icon x-small>$thermometer</v-icon>
++        <span class="text-body-1">
++          <v-icon small>$thermometer</v-icon>
 +          {{ unit.state.temp ? `${unit.state.temp}°C` : '--°C' }}
 +        </span>
 +      </div>
@@ -2492,9 +2492,8 @@ index 0000000..54eeffc
 +}
 +
 +.ace-rack__small {
-+  font-size: 11px;
++  font-size: 12px;
 +  fill: currentColor;
-+  opacity: 0.7;
 +}
 +
 +.ace-rack__hub {
@@ -2757,7 +2756,7 @@ index 0000000..ff1f17c
 +</style>
 diff --git a/src/components/widgets/acepro/AceProSlot.vue b/src/components/widgets/acepro/AceProSlot.vue
 new file mode 100644
-index 0000000..3ea2cd9
+index 0000000..73ec18f
 --- /dev/null
 +++ b/src/components/widgets/acepro/AceProSlot.vue
 @@ -0,0 +1,175 @@
@@ -2771,11 +2770,11 @@ index 0000000..3ea2cd9
 +    @click="$emit('click')"
 +    @keydown.enter="$emit('click')"
 +  >
-+    <div class="text-caption font-weight-bold">
++    <div class="text-subtitle-1 font-weight-bold">
 +      T{{ slotState.tool }}
 +    </div>
 +    <div
-+      class="text-overline ace-slot__status"
++      class="text-body-2 font-weight-bold ace-slot__status"
 +      :class="statusClass"
 +    >
 +      {{ statusLabel }}
@@ -2820,17 +2819,17 @@ index 0000000..3ea2cd9
 +      />
 +    </svg>
 +
-+    <div class="text-caption font-weight-bold text-truncate px-1">
++    <div class="text-subtitle-1 font-weight-bold text-truncate px-1">
 +      {{ empty ? '---' : material }}
 +      <v-icon
 +        v-if="rfid"
-+        x-small
++        small
 +        title="Read from RFID tag"
 +      >
 +        {{ icons.nfc }}
 +      </v-icon>
 +    </div>
-+    <div class="text-caption secondary--text">
++    <div class="text-body-2">
 +      {{ empty || !slotState.temp ? '--' : `${slotState.temp}°C` }}
 +    </div>
 +  </div>
@@ -2884,7 +2883,7 @@ index 0000000..3ea2cd9
 +  get statusClass (): string {
 +    if (this.active) return 'primary--text'
 +    if (this.feeding) return 'orange--text'
-+    if (this.empty) return 'grey--text'
++    if (this.empty) return ''
 +    if (this.slotState.status === 'ready') return 'success--text'
 +    return 'warning--text'
 +  }
@@ -2921,7 +2920,7 @@ index 0000000..3ea2cd9
 +}
 +
 +.ace-spool {
-+  width: 56px;
++  width: 96px;
 +  max-width: 100%;
 +  height: auto;
 +  margin: 2px auto;
@@ -2938,10 +2937,10 @@ index 0000000..3ea2cd9
 +</style>
 diff --git a/src/components/widgets/acepro/AceProSlotDialog.vue b/src/components/widgets/acepro/AceProSlotDialog.vue
 new file mode 100644
-index 0000000..ed50d66
+index 0000000..3145fdc
 --- /dev/null
 +++ b/src/components/widgets/acepro/AceProSlotDialog.vue
-@@ -0,0 +1,508 @@
+@@ -0,0 +1,515 @@
 +<template>
 +  <app-dialog
 +    v-model="open"
@@ -2957,7 +2956,7 @@ index 0000000..ed50d66
 +        dense
 +        text
 +        type="info"
-+        class="text-caption mb-3"
++        class="text-body-2 mb-3"
 +      >
 +        This spool was read from its RFID tag
 +        <template v-if="slotState.brand || slotState.sku">
@@ -3009,11 +3008,12 @@ index 0000000..ed50d66
 +          class="ace-swatch mr-2"
 +          :style="{ backgroundColor: color }"
 +        />
-+        <code class="text-caption">{{ color }}</code>
++        <code class="text-body-1">{{ color }}</code>
 +        <v-spacer />
 +        <app-btn
-+          x-small
++          small
 +          text
++          color="primary"
 +          @click="showPicker = !showPicker"
 +        >
 +          {{ showPicker ? 'Hide picker' : 'Pick color' }}
@@ -3036,6 +3036,9 @@ index 0000000..ed50d66
 +        mode="rgba"
 +        hide-mode-switch
 +        hide-inputs
++        canvas-height="220"
++        width="420"
++        dot-size="22"
 +        class="mx-auto mt-2"
 +        @update:color="setColor"
 +      />
@@ -3067,14 +3070,15 @@ index 0000000..ed50d66
 +        </template>
 +      </v-select>
 +      <div class="d-flex align-center mt-1">
-+        <span class="text-caption secondary--text">
++        <span class="text-body-2">
 +          Leave empty to use the endless spool match mode. If none of the chosen spools is ready, the match mode is used.
 +        </span>
 +        <v-spacer />
 +        <app-btn
-+          x-small
++          small
 +          outlined
-+          :disabled="!klippyReady || !chainChanged"
++          color="primary"
++          :disabled="!klippyReady"
 +          @click="saveChain"
 +        >
 +          Save chain
@@ -3088,7 +3092,7 @@ index 0000000..ed50d66
 +      </div>
 +      <div
 +        v-if="moveBlockedReason"
-+        class="text-caption warning--text mb-2"
++        class="text-body-2 warning--text mb-2"
 +      >
 +        {{ moveBlockedReason }}
 +      </div>
@@ -3115,6 +3119,7 @@ index 0000000..ed50d66
 +        <app-btn
 +          small
 +          outlined
++          color="primary"
 +          :disabled="!canMove || empty"
 +          @click="fullUnload"
 +        >
@@ -3123,7 +3128,7 @@ index 0000000..ed50d66
 +        <app-btn
 +          small
 +          outlined
-+          :color="feeding ? 'orange' : undefined"
++          :color="feeding ? 'orange' : 'primary'"
 +          :disabled="!canAssist"
 +          @click="run(`ACE_${feeding ? 'DISABLE' : 'ENABLE'}_FEED_ASSIST T=${tool}`)"
 +        >
@@ -3186,8 +3191,9 @@ index 0000000..ed50d66
 +      </v-row>
 +      <div class="d-flex mt-1 mb-3">
 +        <app-btn
-+          x-small
++          small
 +          text
++          color="primary"
 +          :disabled="!klippyReady || !aceEnabled"
 +          @click="run(`ACE_STOP_FEED T=${tool}\nACE_STOP_RETRACT T=${tool}`)"
 +        >
@@ -3429,21 +3435,21 @@ index 0000000..ed50d66
 +
 +<style lang="scss" scoped>
 +.ace-swatch {
-+  width: 22px;
-+  height: 22px;
++  width: 36px;
++  height: 36px;
 +  border-radius: 50%;
 +  border: 1px solid rgba(128, 128, 128, 0.6);
 +}
 +
 +.ace-swatch--small {
-+  width: 14px;
-+  height: 14px;
++  width: 20px;
++  height: 20px;
 +}
 +
 +.ace-swatch--preset {
 +  cursor: pointer;
-+  width: 20px;
-+  height: 20px;
++  width: 38px;
++  height: 38px;
 +}
 +
 +.ace-actions > * {
@@ -3452,7 +3458,7 @@ index 0000000..ed50d66
 +</style>
 diff --git a/src/components/widgets/acepro/AceProStrip.vue b/src/components/widgets/acepro/AceProStrip.vue
 new file mode 100644
-index 0000000..cd25092
+index 0000000..a47c56a
 --- /dev/null
 +++ b/src/components/widgets/acepro/AceProStrip.vue
 @@ -0,0 +1,251 @@
@@ -3466,7 +3472,7 @@ index 0000000..cd25092
 +      >
 +        <span
 +          v-if="aceUnits.length > 1"
-+          class="text-caption font-weight-bold secondary--text mr-1 ace-strip__label"
++          class="text-body-2 font-weight-bold mr-1 ace-strip__label"
 +        >
 +          ACE {{ unit.index + 1 }}
 +        </span>
@@ -3489,7 +3495,7 @@ index 0000000..cd25092
 +            :class="{ 'ace-strip__dot--empty': aceSlotIsEmpty(slot) }"
 +            :style="aceSlotIsEmpty(slot) ? undefined : { backgroundColor: aceSlotColor(slot) }"
 +          />
-+          <div class="text-caption ace-strip__tool">
++          <div class="text-body-2 ace-strip__tool">
 +            T{{ slot.tool }}
 +          </div>
 +        </div>
@@ -3516,7 +3522,7 @@ index 0000000..cd25092
 +                · {{ selectedEntry.slot.temp }}°C
 +              </template>
 +            </div>
-+            <div class="text-caption secondary--text">
++            <div class="text-body-2">
 +              {{ details }}
 +            </div>
 +          </div>
@@ -3542,7 +3548,7 @@ index 0000000..cd25092
 +            Unload
 +          </app-btn>
 +          <app-btn
-+            x-small
++            small
 +            outlined
 +            @click="$emit('slot-click', { unit: selectedEntry.unit.index, slot: selectedEntry.slot.index })"
 +          >
@@ -3554,7 +3560,7 @@ index 0000000..cd25092
 +
 +    <div class="mt-2">
 +      <app-btn
-+        x-small
++        small
 +        text
 +        @click="showDryers = !showDryers"
 +      >
@@ -3584,7 +3590,7 @@ index 0000000..cd25092
 +          >
 +            <span
 +              v-if="aceUnits.length > 1"
-+              class="text-caption font-weight-bold mr-2"
++              class="text-body-2 font-weight-bold mr-2"
 +            >ACE {{ unit.index + 1 }}</span>
 +            <ace-pro-dryer
 +              :unit="unit"
@@ -3680,8 +3686,8 @@ index 0000000..cd25092
 +}
 +
 +.ace-strip__dot {
-+  width: 28px;
-+  height: 28px;
++  width: 40px;
++  height: 40px;
 +  margin: 0 auto;
 +  border-radius: 50%;
 +  border: 1px solid rgba(128, 128, 128, 0.7);
@@ -3709,7 +3715,7 @@ index 0000000..cd25092
 +</style>
 diff --git a/src/components/widgets/acepro/AceProTable.vue b/src/components/widgets/acepro/AceProTable.vue
 new file mode 100644
-index 0000000..b900ca2
+index 0000000..7d63a67
 --- /dev/null
 +++ b/src/components/widgets/acepro/AceProTable.vue
 @@ -0,0 +1,167 @@
@@ -3751,7 +3757,7 @@ index 0000000..b900ca2
 +                >
 +                  {{ unit.state.connection_state || 'no data' }}
 +                </v-chip>
-+                <span class="text-caption secondary--text">
++                <span class="text-body-2">
 +                  {{ unit.state.temp ? `${unit.state.temp}°C` : '' }}
 +                </span>
 +                <v-spacer />
@@ -3815,7 +3821,7 @@ index 0000000..b900ca2
 +                Unload
 +              </app-btn>
 +              <app-btn
-+                x-small
++                small
 +                text
 +                @click="$emit('slot-click', { unit: unit.index, slot: slot.index })"
 +              >
@@ -3850,7 +3856,7 @@ index 0000000..b900ca2
 +
 +  statusClass (slot: AceSlotState): string {
 +    if (slot.tool === this.aceCurrentTool) return 'primary--text'
-+    if (this.aceSlotIsEmpty(slot)) return 'grey--text'
++    if (this.aceSlotIsEmpty(slot)) return ''
 +    return slot.status === 'ready' ? 'success--text' : 'warning--text'
 +  }
 +}
@@ -3882,39 +3888,39 @@ index 0000000..b900ca2
 +</style>
 diff --git a/src/components/widgets/acepro/AceProUnit.vue b/src/components/widgets/acepro/AceProUnit.vue
 new file mode 100644
-index 0000000..5cec797
+index 0000000..5533397
 --- /dev/null
 +++ b/src/components/widgets/acepro/AceProUnit.vue
 @@ -0,0 +1,122 @@
 +<template>
 +  <div
-+    class="ace-unit rounded pa-2"
++    class="ace-unit rounded pa-3"
 +    :class="$vuetify.theme.dark ? 'grey darken-4' : 'grey lighten-4'"
 +  >
 +    <div class="d-flex align-center flex-wrap mb-2">
 +      <span
 +        v-if="showTitle"
-+        class="font-weight-bold mr-2"
++        class="text-h6 mr-2"
 +      >
 +        ACE {{ unit.index + 1 }}
 +      </span>
 +      <v-chip
-+        x-small
++        small
 +        label
 +        :color="connectionColor"
 +        class="mr-2"
 +      >
 +        {{ connectionLabel }}
 +      </v-chip>
-+      <span class="text-caption secondary--text text-truncate">
++      <span class="text-body-2 text-truncate">
 +        {{ deviceLabel }}
 +      </span>
 +      <v-spacer />
 +      <span
-+        class="text-caption"
++        class="text-body-1"
 +        title="ACE chamber"
 +      >
-+        <v-icon x-small>$thermometer</v-icon>
++        <v-icon small>$thermometer</v-icon>
 +        {{ temperatureLabel }}
 +        <template v-if="unit.state.humidity">
 +          · {{ unit.state.humidity }}% RH
