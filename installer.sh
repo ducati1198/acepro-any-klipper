@@ -272,6 +272,134 @@ ensure_klipperscreen_font_size() {
     fi
 }
 
+# Copy an optional config file next to the other ACE configs.
+# Missing -> copy. Identical -> nothing. Different -> ask, back up, replace.
+install_optional_cfg() {
+    local source="$1"
+    local target="$2"
+    local label="$3"
+
+    if [ ! -f "$source" ]; then
+        print_warning "$label not found in the repository: $source"
+        return 1
+    fi
+    if [ -f "$target" ] && cmp -s "$source" "$target"; then
+        print_success "$label already up to date"
+        return 0
+    fi
+    if [ -e "$target" ] || is_symlink "$target"; then
+        print_warning "$label already exists and differs"
+        if ! prompt_yes_no "Back up and replace $label?"; then
+            print_info "Kept your $label"
+            return 0
+        fi
+        backup_file "$target"
+        is_symlink "$target" && remove_symlink_if_exists "$target"
+    fi
+    cp "$source" "$target"
+    print_success "Copied: $source → $target"
+}
+
+# Add a line like "[include cut_calibrate.cfg]" right after the acepro include.
+ensure_include_line() {
+    local printer_cfg="$1"
+    local include_line="$2"
+
+    [ -f "$printer_cfg" ] || { print_warning "printer.cfg not found: $printer_cfg"; return 1; }
+    if grep -qF "$include_line" "$printer_cfg"; then
+        print_success "printer.cfg already has $include_line"
+        return 0
+    fi
+    backup_file "$printer_cfg"
+    local tmpfile
+    tmpfile=$(mktemp)
+    awk -v line="$include_line" '
+        { print }
+        /^[[:space:]]*\[include[[:space:]]+acepro\.cfg\]/ && !done { print line; done=1 }
+        END { if (!done) print line }
+    ' "$printer_cfg" > "$tmpfile" && mv "$tmpfile" "$printer_cfg"
+    print_success "Added $include_line to printer.cfg"
+}
+
+# CUT_TIP uses FORCE_MOVE, so [force_move] must be enabled.
+ensure_force_move() {
+    local printer_cfg="$1"
+
+    [ -f "$printer_cfg" ] || { print_warning "printer.cfg not found: $printer_cfg"; return 1; }
+    if grep -qE '^[[:space:]]*\[force_move\]' "$printer_cfg"; then
+        if grep -qiE '^[[:space:]]*enable_force_move[[:space:]]*:[[:space:]]*true' "$printer_cfg"; then
+            print_success "printer.cfg: [force_move] already enabled"
+        else
+            print_warning "printer.cfg has [force_move] but enable_force_move is not True."
+            print_info "Set 'enable_force_move: True' in that section (CUT_TIP needs it)."
+        fi
+        return 0
+    fi
+    backup_file "$printer_cfg"
+    printf '\n[force_move]\nenable_force_move: True\n' >> "$printer_cfg"
+    print_success "Added [force_move] enable_force_move: True to printer.cfg"
+}
+
+# Install the Fluidd build that has the ACE Pro card and the spool picker.
+# Keeps a backup, keeps your Fluidd settings (config.json) and your ACE dashboard links.
+install_fluidd_panel() {
+    local fluidd_dir="$1"
+    local zip="$SCRIPT_DIR/fluidd/fluidd-v1.37.7-acepro.zip"
+    local sum="$zip.sha256"
+
+    if [ ! -f "$zip" ]; then
+        print_error "Fluidd build not found: $zip"
+        return 1
+    fi
+    if [ -f "$sum" ]; then
+        if (cd "$SCRIPT_DIR/fluidd" && sha256sum -c "$(basename "$sum")" >/dev/null 2>&1); then
+            print_success "Checksum OK"
+        else
+            print_error "Checksum of $zip does not match. Not installing."
+            return 1
+        fi
+    fi
+    if [ ! -d "$fluidd_dir" ]; then
+        print_warning "Fluidd directory not found: $fluidd_dir"
+        print_info "Install Fluidd first (for example with KIAUH), then run this installer again."
+        return 1
+    fi
+
+    local backup="${fluidd_dir}_backup_$(date +"%Y%m%d_%H%M%S")"
+    cp -a "$fluidd_dir" "$backup" && print_success "Backed up Fluidd → $backup"
+
+    # Old hashed files would just pile up
+    rm -rf "$fluidd_dir/assets"
+
+    if command -v unzip >/dev/null 2>&1; then
+        unzip -qo "$zip" -x config.json -d "$fluidd_dir"
+    else
+        python3 - "$zip" "$fluidd_dir" <<'PYZIP'
+import sys, zipfile
+z = zipfile.ZipFile(sys.argv[1])
+for n in z.namelist():
+    if n != "config.json":
+        z.extract(n, sys.argv[2])
+PYZIP
+    fi
+    # A fresh Fluidd has no config.json yet - use the one from the build
+    [ -f "$fluidd_dir/config.json" ] || python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extract('config.json', sys.argv[2])" "$zip" "$fluidd_dir"
+    chmod -R a+rX "$fluidd_dir" 2>/dev/null || true
+
+    if grep -rlq "Choose ACE spools" "$fluidd_dir/assets" 2>/dev/null; then
+        print_success "Fluidd ACE panel installed"
+    else
+        print_error "Could not find the ACE panel in $fluidd_dir/assets - restoring backup"
+        rm -rf "$fluidd_dir" && cp -a "$backup" "$fluidd_dir"
+        return 1
+    fi
+    if grep -qE '^\[update_manager[[:space:]]+fluidd\]' "$CONFIG_DIR/moonraker.conf" 2>/dev/null; then
+        print_warning "moonraker.conf has [update_manager fluidd]: updating Fluidd there replaces this build."
+        print_info "Run this installer again after a Fluidd update, or remove that section."
+    fi
+    print_info "Hard-refresh the browser (Ctrl/Cmd+Shift+R) to load it."
+}
+
 # Create or replace symlink
 create_or_replace_symlink() {
     local source="$1"
@@ -366,13 +494,16 @@ Config directory:        $CONFIG_DIR
 Installation steps:
 1. Link ace module to Klipper extras
 1b. (Optional) Install ACE status Moonraker component + dashboard symlinks
+1c. Check the Python packages the driver needs (pyserial, jinja2)
+1d. (Optional) Install the Fluidd ACE Pro card + spool picker
 2. Ensure printer.cfg includes acepro.cfg (at the top) and copy acepro.cfg
 3. Copy acepro_printer_macros.cfg (backup if exists)
 4. Copy acepro_setting.cfg (backup if exists)
 5. Copy acepro_macros.cfg (backup if exists)
-6. Link optional ACE temperature sensor
-7. Link KlipperScreen panel (if available)
-8. Optionally restart services
+5b. Copy cut_calibrate.cfg and spoolman_logic.cfg, enable [force_move] (needed by CUT_TIP)
+6. Link KlipperScreen panel (if available)
+7. Optionally restart services and check that Klipper comes up
+8. Show how to install the OrcaSlicer plugin
 EOF
     
     if ! prompt_yes_no "Continue with installation?"; then
@@ -490,6 +621,48 @@ EOF
         print_info "Skipping ACE status integration (directory missing)"
     fi
     
+    # ========================================================================
+    # Step 1c: Python packages for the driver
+    # ========================================================================
+
+    print_header "Step 1c: Python packages"
+
+    KLIPPY_PY="$INSTALL_HOME/klippy-env/bin/python"
+    [ -x "$KLIPPY_PY" ] || KLIPPY_PY="$(command -v python3)"
+    if "$KLIPPY_PY" -c "import serial, jinja2" 2>/dev/null; then
+        print_success "pyserial and jinja2 are available in $KLIPPY_PY"
+    else
+        print_warning "pyserial or jinja2 is missing in $KLIPPY_PY"
+        if prompt_yes_no "Install them now (pip install pyserial jinja2)?"; then
+            "$KLIPPY_PY" -m pip install "pyserial>=3.4" "jinja2>=3.0.0" \
+                && print_success "Packages installed" \
+                || print_error "pip failed. Run it yourself: $KLIPPY_PY -m pip install pyserial jinja2"
+        fi
+    fi
+    if "$KLIPPY_PY" -m compileall -q "$SCRIPT_DIR/extras" >/dev/null 2>&1; then
+        print_success "Driver files compile (syntax OK)"
+    else
+        print_warning "The driver did not compile with $KLIPPY_PY. Check its Python version (3.9 or newer)."
+    fi
+
+    # ========================================================================
+    # Step 1d: Fluidd ACE Pro card + spool picker (Optional)
+    # ========================================================================
+
+    print_header "Step 1d: Fluidd ACE panel (Optional)"
+
+    echo "Adds an ACE Pro card to the Fluidd dashboard and the 'Choose ACE spools' window"
+    echo "that opens when you press Print. Needs Moonraker's ace_status (step 1b)."
+    FLUIDD_PANEL_INSTALLED=0
+    if prompt_yes_no "Install the Fluidd ACE panel (Fluidd 1.37.7 build from this repository)?"; then
+        FLUIDD_DIR=$(prompt_input "Fluidd install directory" "$INSTALL_HOME/fluidd")
+        if install_fluidd_panel "$FLUIDD_DIR"; then
+            FLUIDD_PANEL_INSTALLED=1
+        fi
+    else
+        print_info "Fluidd panel skipped"
+    fi
+
     # ========================================================================
     # Step 2: Ensure printer.cfg includes acepro.cfg (at the top) and copy acepro.cfg
     # ========================================================================
@@ -685,6 +858,28 @@ EOF
     fi
     
     # ========================================================================
+    # Step 5b: Cutter calibration, Spoolman helpers, force_move
+    # ========================================================================
+
+    print_header "Step 5b: Extra config files"
+
+    install_optional_cfg "$SCRIPT_DIR/config/cut_calibrate.cfg" "$CONFIG_DIR/cut_calibrate.cfg" "cut_calibrate.cfg"
+    install_optional_cfg "$SCRIPT_DIR/config/spoolman_logic.cfg" "$CONFIG_DIR/spoolman_logic.cfg" "spoolman_logic.cfg"
+
+    echo ""
+    print_info "CUT_TIP needs [force_move] enabled."
+    if prompt_yes_no "Make sure [force_move] enable_force_move: True is in printer.cfg?"; then
+        ensure_force_move "$PRINTER_CFG"
+    fi
+    echo ""
+    print_info "cut_calibrate.cfg adds CUT_CAL_START / CUT_CAL_STEP / CUT_CAL_END to find where the cutter closes."
+    if prompt_yes_no "Add [include cut_calibrate.cfg] to printer.cfg now?"; then
+        ensure_include_line "$PRINTER_CFG" "[include cut_calibrate.cfg]"
+    else
+        print_info "Skipped. Add [include cut_calibrate.cfg] when you want to calibrate (README section 9)."
+    fi
+
+    # ========================================================================
     # Step 6: Link KlipperScreen panel (if available)
     # ========================================================================
 
@@ -727,8 +922,6 @@ EOF
         else
             print_info "Skipped KlipperScreen patch (you can apply $KLIPPERSCREEN_PATCH manually later)"
         fi
-    elif [ ! -f "$KLIPPERSCREEN_PATCH" ]; then
-        print_warning "KlipperScreen patch file not found: $KLIPPERSCREEN_PATCH"
     fi
 
     # Ensure KlipperScreen.conf has font_size = small and ACE Pro menu entry
@@ -779,6 +972,30 @@ EOF
         echo "  sudo systemctl restart klipper"
     fi
     
+    # Wait for Klipper and report whether the ACE units came up
+    if command -v curl >/dev/null 2>&1 && curl -s -m 3 http://127.0.0.1:7125/server/info >/dev/null 2>&1; then
+        print_info "Waiting for Klipper to start..."
+        KLIPPY_STATE=""
+        for _ in $(seq 1 30); do
+            sleep 2
+            KLIPPY_STATE=$(curl -s -m 3 http://127.0.0.1:7125/server/info | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["klippy_state"])' 2>/dev/null || echo "")
+            case "$KLIPPY_STATE" in ready|error|shutdown) break ;; esac
+        done
+        case "$KLIPPY_STATE" in
+            ready)
+                print_success "Klipper is ready"
+                ACE_SEEN=$(curl -s -m 3 "http://127.0.0.1:7125/printer/objects/list" | python3 -c 'import sys,json; print(sum(1 for o in json.load(sys.stdin)["result"]["objects"] if o=="ace" or o.startswith("ace_instance")))' 2>/dev/null || echo 0)
+                if [ "${ACE_SEEN:-0}" -gt 0 ] 2>/dev/null; then
+                    print_success "ACE driver loaded ($ACE_SEEN ACE objects). Run ACE_GET_STATUS in the console."
+                else
+                    print_warning "Klipper is ready but the ACE driver is not loaded. Check that printer.cfg has [include acepro.cfg]."
+                fi
+                ;;
+            "") print_warning "Could not read Klipper's state. Check Fluidd." ;;
+            *)  print_error "Klipper state: $KLIPPY_STATE. Read the error in Fluidd or ~/printer_data/logs/klippy.log" ;;
+        esac
+    fi
+
     if [ -d "$KLIPPERSCREEN_PANELS_DIR" ]; then
         echo ""
         if prompt_yes_no "Restart KlipperScreen service now?"; then
@@ -804,6 +1021,11 @@ EOF
     
     cat << EOF
 ACE Pro driver installation finished!
+EOF
+    if [ "${FLUIDD_PANEL_INSTALLED:-0}" -eq 1 ]; then
+        echo "  Fluidd ACE panel:               installed (backup of the old Fluidd: ${FLUIDD_DIR}_backup_*)"
+    fi
+    cat << EOF
 
 Configuration Files:
   Main ACE config:               $ACEPRO_TARGET
@@ -853,9 +1075,19 @@ Next steps:
   7. Optional but recommended: Set inventory for each tool:
      ACE_SET_SLOT INSTANCE=0 INDEX=0 COLOR=255,0,0 MATERIAL=PLA TEMP=210
 
-  8. If using Orca Slicer:
-     Install the orca_flush_to_purgelength.py post-processing script on your host PC
-     See README.md section on Orca Slicer integration for detailed instructions
+  8. OrcaSlicer 2.5 (runs on your computer, not on the printer):
+     a) Copy the plugin to your computer, for example:
+          scp $INSTALL_USER@<printer-ip>:$SCRIPT_DIR/orca_plugin/ace_spool_mapper.py .
+     b) Orca: File -> Plugins -> Browse plugins -> Install local plugin -> pick the file.
+     c) Follow $SCRIPT_DIR/orca_plugin/INSTALL.md (Process -> Others -> Slicing Pipeline Plugin).
+     d) Optional: slicer/orca_flush_to_purgelength.py converts flush volumes to purge lengths.
+     Slicer start G-code and the other steps: README.md, section 5.
+
+  9. Fluidd and KlipperScreen: hard-refresh the browser (Ctrl/Cmd+Shift+R). Press Print on a file
+     to see the "Choose ACE spools" window.
+
+ 10. Calibrate the cutter before the first multi-colour print (README.md, section 9):
+     CUT_CAL_START, CUT_CAL_STEP (repeat), CUT_CAL_END, then set cut_full_x in acepro_macros.cfg.
 
 EOF
 }

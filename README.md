@@ -115,16 +115,21 @@ chmod +x installer.sh
 ./installer.sh
 ```
 
-The installer asks before each step. It will:
+The installer asks before each step and is safe to run again (it backs up before replacing anything). It will:
 
-1. Link the ACE driver (`extras/ace/`) into Klipper's `extras` folder.
-2. Optionally install the Moonraker `ace_status` component and add `[ace_status]` to `moonraker.conf`.
-3. Copy `acepro.cfg`, `acepro_printer_macros.cfg`, `acepro_setting.cfg` and `acepro_macros.cfg` into your config folder (existing files are backed up).
-4. Add `[include acepro.cfg]` at the top of `printer.cfg`.
-5. Optionally link the KlipperScreen panel, add the **ACE Pro** menu entries and set `font_size = small`.
-6. Offer to restart Moonraker, Klipper and KlipperScreen.
+1. Link the ACE driver (`extras/ace/`), `virtual_pins` and the ACE temperature sensor into Klipper's `extras` folder.
+2. Install the Moonraker `ace_status` component and add `[ace_status]` to `moonraker.conf`.
+3. Check that `pyserial` and `jinja2` are available and that the driver compiles.
+4. Install the **Fluidd ACE panel** (ACE card + spool picker): checks the zip, backs up `~/fluidd`, keeps your `config.json`, and restores the backup if the panel isn't found afterwards.
+5. Copy `acepro.cfg`, `acepro_printer_macros.cfg`, `acepro_setting.cfg` and `acepro_macros.cfg` into your config folder (existing files are backed up) and add `[include acepro.cfg]` at the top of `printer.cfg`.
+6. Copy `cut_calibrate.cfg` and `spoolman_logic.cfg`, add `[force_move]` (needed by `CUT_TIP`) and, if you want, `[include cut_calibrate.cfg]`.
+7. Link the **KlipperScreen** panel, add the **ACE Pro** menu entries and set `font_size = small`.
+8. Restart Moonraker, Klipper and KlipperScreen, wait for Klipper and tell you whether the ACE driver loaded.
+9. Print the steps for the **OrcaSlicer plugin**, which has to be installed on your computer (section 5.3).
 
-### 3.3 Add to `printer.cfg`
+### 3.3 Check `printer.cfg`
+
+The installer adds these for you. Check they are there:
 
 ```ini
 [include acepro.cfg]
@@ -143,13 +148,13 @@ sudo systemctl restart klipper
 
 Then run `ACE_GET_STATUS` in the console. You should see every ACE unit connected with its four slots.
 
-### 3.4 Fluidd ACE panel (optional but recommended)
+### 3.4 Fluidd ACE panel
 
-See [section 7](#7-fluidd-ace-panel).
+Installed by the installer (step 4 above). Manual steps and building it yourself: [section 7](#7-fluidd-ace-panel).
 
-### 3.5 OrcaSlicer plugin (optional)
+### 3.5 OrcaSlicer plugin
 
-See [section 5.3](#53-ace-spool-mapper-plugin).
+Runs on your computer, so the installer can only show the steps. Copy it over and install it from Orca: [section 5.3](#53-ace-spool-mapper-plugin).
 
 > **After any install or update, hard-refresh the browser** so Fluidd loads the new files:
 > Windows/Linux `Ctrl+Shift+R` · macOS `Cmd+Shift+R`.
