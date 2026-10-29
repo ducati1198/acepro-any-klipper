@@ -1,12 +1,24 @@
 import logging
 import json
+import time
 
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, Gdk, GLib  # noqa: E402
+from gi.repository import Gtk, Gdk, GLib, Pango  # noqa: E402
 
 from ks_includes.screen_panel import ScreenPanel  # noqa: E402
 from ks_includes.widgets.keypad import Keypad  # noqa: E402
+
+
+# Content width the landscape control row needs with its full labels (ACE Pro,
+# Endless Spool, Match Mode), margins and KlipperScreen's scrollbar included:
+# 521 px measured at KlipperScreen's small font. Narrower landscape screens
+# (480x320) get the same controls with shorter labels.
+WIDE_LAYOUT_MIN_WIDTH = 525
+# The Utilities view's three columns of 160 px buttons need 544 px likewise.
+WIDE_UTILITIES_MIN_WIDTH = 544
+# Response id of the slot dialogs' third button; Gtk's own ids are <= 0.
+RESP_FORCE_UNLOAD = 100
 
 
 class Panel(ScreenPanel):
@@ -29,8 +41,9 @@ class Panel(ScreenPanel):
     }
 
     def material_options(self):
-        """Single source of truth for selectable materials."""
-        return ["Empty"] + list(self.FILAMENT_TEMP_DEFAULTS.keys())
+        """Single source of truth for selectable materials. "Empty" is not
+        one: whether a slot holds a spool is the ACE's to report."""
+        return list(self.FILAMENT_TEMP_DEFAULTS.keys())
 
     def __init__(self, screen, title):
         super().__init__(screen, title)
@@ -60,6 +73,13 @@ class Panel(ScreenPanel):
 
         # Global state
         self.current_loaded_slot = -1
+        # Printer tool number of the first ACE's slot 0 (ace_state
+        # tool_base): a printer-side tool changer may put tools of its own
+        # first (Kobra X: direct-fed turret inlets); 0 on other printers. Unknown until the first
+        # status reply; slot taps wait for it.
+        self.printer_tool_offset = 0
+        self.printer_tools_known = False
+        self.target_tool_index = -1  # -1 = no toolchange in flight/unconfirmed
         self.endless_spool_enabled = False
         self.dryer_enabled = False
         self.ace_pro_enabled = True   # assume enabled until first RPC update
@@ -69,6 +89,7 @@ class Panel(ScreenPanel):
         self.current_instance = 0  # Currently displayed instance
         self.selected_dryer_instance = "ALL"  # Selected dryer instance: 0, 1, or "ALL"
         self.rfid_sync_enabled = True  # Track RFID sync toggle locally
+        self._pending_toggle_states = {}
 
         # Initialize attributes used in various methods
         self._activation_timeout_id = None
@@ -141,22 +162,46 @@ class Panel(ScreenPanel):
         return False  # do not repeat
 
     def _poll_connection_status(self):
-        """Query connection_state for each ACE instance directly from Klipper."""
+        """Query connection_state + slot inventory for each ACE instance.
+
+        This is the only periodic (every 3s) live refresh for ACE data.
+        Backend inventory/slot changes (e.g. a new spool becoming "ready"
+        after insertion, or a runout marking a slot "empty") are NOT part
+        of KlipperScreen's global push subscription (same reasoning as
+        ace_state - see acepro.py history), so without this the on-screen
+        slot inventory would only ever update when the panel is (re)opened
+        or the user manually hits "Refresh All". Reuses the same
+        ace_fields/_process_rpc_status path as a manual refresh so slots,
+        dryer status, and ace_state (current/target index, endless spool,
+        etc.) all stay live too, not just connection_state.
+        """
         try:
-            direct_ws = getattr(
-                getattr(getattr(self, "_screen", None), "_ws", None),
-                "klippy", None
-            )
-            direct_ws = getattr(direct_ws, "_ws", None)
+            direct_ws = getattr(getattr(self, "_screen", None), "_ws", None)
             if not callable(getattr(direct_ws, "send_method", None)):
                 return True
 
-            objects = {f"ace_instance_{i}": ["connection_state"] for i in self.ace_instances}
+            ace_fields = [
+                "slots",
+                "status",
+                "dryer",
+                "dryer_status",
+                "temp",
+                "enable_rfid",
+                "fan_speed",
+                "feed_assist_count",
+                "cont_assist_time",
+                "connection_state",
+            ]
+            objects = {"ace_state": ["ace_instances", "current_index", "target_index", "endless_spool_enabled", "endless_spool_match_mode", "ace_pro_enabled", "toolhead_sensor", "rdm_sensor", "tool_base"]}
+            for instance_id in self.ace_instances:
+                objects[f"ace_instance_{instance_id}"] = ace_fields
 
             def _cb(response, *_):
                 try:
                     result = (response or {}).get("result", {})
                     status = (result or {}).get("status", {})
+                    if isinstance(status, dict):
+                        self._process_rpc_status(status)
                     for instance_id in self.ace_instances:
                         key = f"ace_instance_{instance_id}"
                         val = (status.get(key) or {}).get("connection_state")
@@ -245,14 +290,27 @@ class Panel(ScreenPanel):
                 logging.error("ACE: _ws not available for gcode")
                 return False
 
-            if not hasattr(self._screen._ws, 'klippy'):
-                logging.error("ACE: klippy not available for gcode")
+
+            ws = self._screen._ws
+            api = getattr(ws, 'api', None)
+            if callable(getattr(api, 'gcode_script', None)):
+                logging.info(f"ACE: Sending gcode via api.gcode_script: {gcode_command}")
+                sent = api.gcode_script(gcode_command)
+            elif callable(getattr(ws, 'send_method', None)):
+                logging.info(f"ACE: Sending gcode via direct websocket: {gcode_command}")
+                sent = ws.send_method("printer.gcode.script", {"script": gcode_command})
+            else:
+                logging.error("ACE: No gcode send path available")
                 return False
 
-            self._screen._ws.klippy.gcode_script(gcode_command)
-            return True
+            if sent:
+                logging.info(f"ACE: Sent gcode: {gcode_command}")
+                return True
+
+            logging.error(f"ACE: Gcode command not sent: {gcode_command}")
+            return False
         except Exception as e:
-            logging.error(f"ACE: Error sending gcode '{gcode_command}': {e}")
+            logging.error(f"ACE: Error sending gcode '{gcode_command}': {e}", exc_info=True)
             self._screen.show_popup_message(
                 "Connection error. Check Klipper status."
             )
@@ -265,7 +323,7 @@ class Panel(ScreenPanel):
         """
         try:
             ws = getattr(self, "_screen", None)
-            klippy = getattr(getattr(ws, "_ws", None), "klippy", None)
+            klippy = getattr(ws, "_ws", None)
             query_fn = None
             logging.debug(
                 f"ACE: Klippy RPC methods (query/object): "
@@ -279,8 +337,10 @@ class Panel(ScreenPanel):
 
             if not callable(query_fn):
                 logging.debug("ACE: JSON-RPC query method not available; trying direct websocket query")
-                # Try direct printer.objects.query via websocket send_method
-                direct_ws = getattr(klippy, "_ws", None)
+                # screen._ws IS the KlippyWebsocket/KlippyUDS instance itself
+                # (it has no nested .klippy attribute) - send_method lives on it
+                # directly.
+                direct_ws = klippy
                 if callable(getattr(direct_ws, "send_method", None)):
                     ace_fields = [
                         "slots",
@@ -293,7 +353,7 @@ class Panel(ScreenPanel):
                         "feed_assist_count",
                         "cont_assist_time",
                     ]
-                    objects = {"ace_state": ["ace_instances", "current_index", "endless_spool_enabled", "endless_spool_match_mode", "ace_pro_enabled", "toolhead_sensor", "rdm_sensor"]}
+                    objects = {"ace_state": ["ace_instances", "current_index", "target_index", "endless_spool_enabled", "endless_spool_match_mode", "ace_pro_enabled", "toolhead_sensor", "rdm_sensor", "tool_base"]}
                     for instance_id in self.ace_instances:
                         key = f"ace_instance_{instance_id}"
                         objects[key] = ace_fields
@@ -361,7 +421,7 @@ class Panel(ScreenPanel):
                 "feed_assist_count",
                 "cont_assist_time",
             ]
-            objects = {"ace_state": ["ace_instances", "current_index", "endless_spool_enabled", "endless_spool_match_mode", "ace_pro_enabled", "toolhead_sensor", "rdm_sensor"]}
+            objects = {"ace_state": ["ace_instances", "current_index", "target_index", "endless_spool_enabled", "endless_spool_match_mode", "ace_pro_enabled", "toolhead_sensor", "rdm_sensor", "tool_base"]}
             for instance_id in self.ace_instances:
                 key = f"ace_instance_{instance_id}"
                 objects[key] = ace_fields
@@ -381,6 +441,24 @@ class Panel(ScreenPanel):
 
         return False
 
+    def _mark_pending_toggle_state(self, state_key, desired_value):
+        self._pending_toggle_states[state_key] = {
+            "value": desired_value,
+            "time": time.monotonic(),
+        }
+
+    def _should_ignore_toggle_update(self, state_key, reported_value, grace_seconds=6):
+        pending = self._pending_toggle_states.get(state_key)
+        if not pending:
+            return False
+        if pending.get("value") == reported_value:
+            self._pending_toggle_states.pop(state_key, None)
+            return False
+        if time.monotonic() - pending.get("time", 0) < grace_seconds:
+            return True
+        self._pending_toggle_states.pop(state_key, None)
+        return False
+
     def _process_rpc_status(self, status_payload):
         """Process Moonraker objects.query payload to update UI without gcode chatter."""
         try:
@@ -389,6 +467,15 @@ class Panel(ScreenPanel):
 
             # Global/manager state
             ace_state = status_payload.get("ace_state", {})
+            if isinstance(ace_state, dict) and "tool_base" in ace_state:
+                offset = int(ace_state["tool_base"] or 0)
+                self.printer_tools_known = True
+                if offset != self.printer_tool_offset:
+                    self.printer_tool_offset = offset
+                    for instance_id, data in self.instance_data.items():
+                        data['tool_offset'] = offset + instance_id * 4
+                    self.update_slot_loaded_states()
+
             if isinstance(ace_state, dict) and "current_index" in ace_state:
                 current_index = ace_state.get("current_index", -1)
                 if current_index != self.current_loaded_slot:
@@ -397,22 +484,39 @@ class Panel(ScreenPanel):
                     logging.info(f"ACE: (RPC) Updated current_loaded_slot: {old_slot} → {current_index}")
                     self.update_slot_loaded_states()
 
+                # Unconfirmed toolchange tracking: distinct from current_index,
+                # a non -1 value here means a toolchange attempt is still in
+                # flight or was left unconfirmed by a failure.
+                if "target_index" in ace_state:
+                    target_index = ace_state.get("target_index", -1)
+                    if target_index != self.target_tool_index:
+                        old_target = self.target_tool_index
+                        self.target_tool_index = target_index
+                        logging.info(f"ACE: (RPC) Updated target_tool_index: {old_target} → {target_index}")
+                        self.update_slot_loaded_states()
+
                 # Endless spool toggle
                 endless_enabled = ace_state.get("endless_spool_enabled")
                 if isinstance(endless_enabled, bool) and hasattr(self, "endless_spool_switch"):
-                    try:
-                        self.endless_spool_switch.handler_block_by_func(self.on_endless_spool_toggled)
-                        self.endless_spool_switch.set_active(endless_enabled)
-                        self.endless_spool_switch.handler_unblock_by_func(self.on_endless_spool_toggled)
-                        self.endless_spool_status.set_markup(
-                            '<span foreground="green"><b>On</b></span>' if endless_enabled
-                            else '<span foreground="gray">Off</span>'
+                    if self._should_ignore_toggle_update("endless_spool_enabled", endless_enabled):
+                        logging.debug(
+                            "ACE: ignoring temporary endless spool state %s while waiting for confirmation",
+                            endless_enabled,
                         )
-                        self.endless_spool_enabled = endless_enabled
-                        self._update_match_mode_sensitivity()
-                    except Exception:
-                        # Switch not connected yet; skip quietly
-                        pass
+                    else:
+                        try:
+                            self.endless_spool_switch.handler_block_by_func(self.on_endless_spool_toggled)
+                            self.endless_spool_switch.set_active(endless_enabled)
+                            self.endless_spool_switch.handler_unblock_by_func(self.on_endless_spool_toggled)
+                            self.endless_spool_status.set_markup(
+                                '<span foreground="green"><b>On</b></span>' if endless_enabled
+                                else '<span foreground="gray">Off</span>'
+                            )
+                            self.endless_spool_enabled = endless_enabled
+                            self._update_match_mode_sensitivity()
+                        except Exception:
+                            # Switch not connected yet; skip quietly
+                            pass
 
                 match_mode = ace_state.get("endless_spool_match_mode")
                 if isinstance(match_mode, str):
@@ -422,16 +526,22 @@ class Panel(ScreenPanel):
                 ace_pro_enabled = ace_state.get("ace_pro_enabled")
                 if isinstance(ace_pro_enabled, bool):
                     if hasattr(self, "ace_pro_switch"):
-                        try:
-                            self.ace_pro_switch.handler_block_by_func(self.on_ace_pro_toggled)
-                            self.ace_pro_switch.set_active(ace_pro_enabled)
-                            self.ace_pro_switch.handler_unblock_by_func(self.on_ace_pro_toggled)
-                            self.ace_pro_status.set_markup(
-                                '<span foreground="green"><b>On</b></span>' if ace_pro_enabled
-                                else '<span foreground="red">Off</span>'
+                        if self._should_ignore_toggle_update("ace_pro_enabled", ace_pro_enabled):
+                            logging.debug(
+                                "ACE: ignoring temporary ACE Pro state %s while waiting for confirmation",
+                                ace_pro_enabled,
                             )
-                        except Exception:
-                            pass
+                        else:
+                            try:
+                                self.ace_pro_switch.handler_block_by_func(self.on_ace_pro_toggled)
+                                self.ace_pro_switch.set_active(ace_pro_enabled)
+                                self.ace_pro_switch.handler_unblock_by_func(self.on_ace_pro_toggled)
+                                self.ace_pro_status.set_markup(
+                                    '<span foreground="green"><b>On</b></span>' if ace_pro_enabled
+                                    else '<span foreground="red">Off</span>'
+                                )
+                            except Exception:
+                                pass
                     self.ace_pro_enabled = ace_pro_enabled
                     self._update_ace_pro_sensitivity(ace_pro_enabled)
                     self._update_ace_pro_switch_lock()
@@ -546,6 +656,26 @@ class Panel(ScreenPanel):
             box-shadow: inset 0 0 0 2px #4CAF50;
             border-radius: 6px;
         }
+        .ace_slot_target {
+            box-shadow: inset 0 0 0 2px #B0B0B0;
+            border-radius: 6px;
+        }
+        scrollbar.ace_wide_scrollbar {
+            min-width: 28px;
+        }
+        scrollbar.ace_wide_scrollbar trough {
+            min-width: 28px;
+        }
+        scrollbar.ace_wide_scrollbar slider {
+            min-width: 24px;
+            min-height: 44px;
+            border-radius: 12px;
+        }
+        button.ace_compact_btn {
+            padding: 2px 6px;
+            min-height: 0;
+            font-size: 13px;
+        }
         """
 
         style_provider = Gtk.CssProvider()
@@ -554,7 +684,7 @@ class Panel(ScreenPanel):
         Gtk.StyleContext.add_provider_for_screen(
             Gdk.Screen.get_default(),
             style_provider,
-            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            Gtk.STYLE_PROVIDER_PRIORITY_USER
         )
 
     def get_current_loaded_slot(self):
@@ -569,17 +699,26 @@ class Panel(ScreenPanel):
     def create_main_screen(self):
         """Create the main ACE panel screen layout"""
         self.current_view = "main"
-        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        _portrait = self._is_portrait()
+        _compact = not _portrait and self._gtk.content_width < WIDE_LAYOUT_MIN_WIDTH
+        # A 320 px high screen holds the four rows only with tighter gaps;
+        # a few pixels over and the scrollbar takes 36 px of the width.
+        gap = 2 if _compact else 5
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=gap)
         main_box.set_margin_left(5)
         main_box.set_margin_right(5)
-        main_box.set_margin_top(5)
-        main_box.set_margin_bottom(5)
+        main_box.set_margin_top(gap)
+        main_box.set_margin_bottom(gap)
 
         top_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
 
         self.status_label = Gtk.Label(label="ACE System: Ready")
         self.status_label.get_style_context().add_class("temperature_entry")
         self.status_label.set_halign(Gtk.Align.START)
+        # In portrait, cap minimum width so label updates never widen the layout.
+        if self._is_portrait():
+            self.status_label.set_max_width_chars(16)
+            self.status_label.set_ellipsize(Pango.EllipsizeMode.END)
         top_row.pack_start(self.status_label, False, False, 0)
 
         # Connection state indicator — centered, updated by poll timer
@@ -587,12 +726,15 @@ class Panel(ScreenPanel):
         self.conn_status_label.get_style_context().add_class("description")
         self.conn_status_label.set_halign(Gtk.Align.CENTER)
         self.conn_status_label.set_hexpand(True)
+        # Ellipsize so bold markup updates never inflate the label's minimum width.
+        self.conn_status_label.set_max_width_chars(18)
+        self.conn_status_label.set_ellipsize(Pango.EllipsizeMode.END)
         self.conn_status_label.set_markup('<span foreground="gray">Checking...</span>')
         top_row.pack_start(self.conn_status_label, True, True, 0)
 
         # Utilities entry point (compact)
         spool_btn = Gtk.Button(label="Utilities")
-        spool_btn.set_size_request(120, 38)
+        spool_btn.set_size_request(110, 34)
         spool_btn.set_relief(Gtk.ReliefStyle.NORMAL)
         spool_btn.connect("clicked", lambda w: self.show_spool_panel(w, reset_selection=True))
         top_row.pack_end(spool_btn, False, False, 0)
@@ -601,11 +743,17 @@ class Panel(ScreenPanel):
         main_box.pack_start(top_row, False, False, 0)
 
         # Endless Spool row with three controls: ACE Pro | Endless Spool | Match Mode
-        endless_spool_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
-        endless_spool_row.set_margin_top(5)
+        # In portrait: 2 compact rows (row1: ACE Pro + Endless Spool side-by-side,
+        #                              row2: Match Mode full-width)
+        # In landscape: single horizontal row (original).
+        if _portrait:
+            endless_spool_row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        else:
+            endless_spool_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        endless_spool_row.set_margin_top(2)
 
         # Far left: ACE Pro Enable/Disable
-        ace_pro_control = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        ace_pro_control = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
 
         ace_pro_label = Gtk.Label(label="ACE Pro:")
         ace_pro_label.get_style_context().add_class("description")
@@ -623,12 +771,12 @@ class Panel(ScreenPanel):
             self.ace_pro_status.set_markup('<span foreground="green"><b>On</b></span>')
         else:
             self.ace_pro_status.set_markup('<span foreground="red">Off</span>')
-        endless_spool_row.pack_start(ace_pro_control, False, False, 0)
 
         # Middle: Endless Spool Enable/Disable
-        endless_spool_control = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        endless_spool_control = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
 
-        endless_spool_label = Gtk.Label(label="Endless Spool:")
+        endless_spool_label = Gtk.Label(
+            label="Endless:" if _compact else "Endless Spool:")
         endless_spool_label.get_style_context().add_class("description")
         endless_spool_label.set_halign(Gtk.Align.START)
         endless_spool_control.pack_start(endless_spool_label, False, False, 0)
@@ -648,78 +796,150 @@ class Panel(ScreenPanel):
             self.endless_spool_status.set_markup('<span foreground="green"><b>On</b></span>')
         else:
             self.endless_spool_status.set_markup('<span foreground="gray">Off</span>')
-        endless_spool_row.pack_start(endless_spool_control, False, False, 0)
         self.endless_spool_control = endless_spool_control
 
         # Right side: Match Mode selector
-        match_mode_control = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        match_mode_control = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
 
-        match_mode_label = Gtk.Label()
-        match_mode_label.set_markup('<span foreground="white">Match Mode:</span>')
-        match_mode_label.get_style_context().add_class("description")
-        match_mode_label.set_halign(Gtk.Align.START)
-        match_mode_control.pack_start(match_mode_label, False, False, 0)
+        # The button names the active mode itself; where width is short it
+        # stands without its caption.
+        if not _compact:
+            match_mode_label = Gtk.Label()
+            match_mode_label.set_markup('<span foreground="white">Match Mode:</span>')
+            match_mode_label.get_style_context().add_class("description")
+            match_mode_label.set_halign(Gtk.Align.START)
+            match_mode_control.pack_start(match_mode_label, False, False, 0)
 
         # Match mode selector (Exact / Material Only / Next Ready)
         self.match_mode_button = Gtk.MenuButton()
         self.match_mode_button.set_relief(Gtk.ReliefStyle.NORMAL)
         self.match_mode_button.get_style_context().add_class("color3")
-        # Reduced width for 600px screen
-        self.match_mode_button.set_size_request(110, 36)
+        self._match_mode_width = 100 if _compact else 120
         self._build_match_mode_popover()
         match_mode_control.pack_start(self.match_mode_button, False, False, 0)
 
-        # Mode indicator label
         # Show active mode directly on the button; no extra label to avoid duplication
         self.match_mode_status = None
         self._set_match_mode_ui("exact", update_widget=True)
         self._update_match_mode_sensitivity()
-
-        endless_spool_row.pack_start(match_mode_control, False, False, 0)
         self.match_mode_control = match_mode_control
+
+        if _portrait:
+            # Row 1: ACE Pro + Endless Spool side by side
+            portrait_row1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            portrait_row1.pack_start(ace_pro_control, True, True, 0)
+            portrait_row1.pack_start(endless_spool_control, True, True, 0)
+            endless_spool_row.pack_start(portrait_row1, False, False, 0)
+            # Row 2: Match Mode
+            endless_spool_row.pack_start(match_mode_control, False, False, 0)
+        else:
+            endless_spool_row.pack_start(ace_pro_control, True, True, 0)
+            endless_spool_row.pack_start(endless_spool_control, True, True, 0)
+            endless_spool_row.pack_start(match_mode_control, True, True, 0)
 
         main_box.pack_start(endless_spool_row, False, False, 0)
 
-        self.content_area = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        main_box.pack_start(self.content_area, True, True, 0)
+        self.content_area = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
 
-        bottom_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
+        bottom_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         bottom_box.set_homogeneous(True)
 
-        # Use theme icon name (refresh); file extension is resolved by the icon loader
-        refresh_btn = self._gtk.Button("refresh", "Refresh All", "color3")
-        refresh_btn.set_size_request(-1, 50)
+        if _portrait:
+            # Use plain Gtk.Button with short text so natural height stays small.
+            # self._gtk.Button produces large icon-buttons whose natural height
+            # cannot be overridden with set_size_request alone.
+            refresh_btn = Gtk.Button(label="Refresh")
+            refresh_btn.get_style_context().add_class("color3")
+            refresh_btn.get_style_context().add_class("ace_compact_btn")
+            refresh_btn.set_size_request(-1, 32)
+        else:
+            refresh_btn = self._gtk.Button("refresh", "Refresh All", "color3")
+            refresh_btn.set_size_request(-1, 44)
         refresh_btn.connect("clicked", self.refresh_status)
         bottom_box.pack_start(refresh_btn, True, True, 0)
         self.refresh_btn = refresh_btn
 
         if len(self.ace_instances) > 1:
-            # Use shuffle icon to indicate cycling through instances
             total = len(self.ace_instances)
-            label = f"ACE {self.current_instance} ({self.current_instance + 1} of {total})"
-            cycle_btn = self._gtk.Button("shuffle", label, "color3")
-            cycle_btn.set_size_request(-1, 50)
+            if _portrait:
+                cycle_label = f"ACE {self.current_instance + 1}/{total}"
+                cycle_btn = Gtk.Button(label=cycle_label)
+                cycle_btn.get_style_context().add_class("color3")
+                cycle_btn.get_style_context().add_class("ace_compact_btn")
+                cycle_btn.set_size_request(-1, 32)
+            else:
+                cycle_label = f"ACE {self.current_instance} ({self.current_instance + 1} of {total})"
+                cycle_btn = self._gtk.Button("shuffle", cycle_label, "color3")
+                cycle_btn.set_size_request(-1, 44)
             cycle_btn.connect("clicked", self.cycle_instance)
             self.instance_toggle_btn = cycle_btn
             bottom_box.pack_start(cycle_btn, True, True, 0)
 
-        self.dryer_btn = self._gtk.Button("heat-up", "Dryer Control", "color2")
-        self.dryer_btn.set_size_request(-1, 50)
+        if _portrait:
+            self.dryer_btn = Gtk.Button(label="Dryer")
+            self.dryer_btn.get_style_context().add_class("color2")
+            self.dryer_btn.get_style_context().add_class("ace_compact_btn")
+            self.dryer_btn.set_size_request(-1, 32)
+        else:
+            self.dryer_btn = self._gtk.Button("heat-up", "Dryer Control", "color2")
+            self.dryer_btn.set_size_request(-1, 44)
         self.dryer_btn.connect("clicked", self.show_dryer_panel)
-        
+
         bottom_box.pack_start(self.dryer_btn, True, True, 0)
 
-        main_box.pack_start(bottom_box, False, False, 0)
+        # _gtk.Button() is created with vexpand=True, so a row holding one
+        # reports compute_expand()==True and GtkBox hands the row a share of the
+        # leftover height -- but pack_start(..., False, False) means fill=False,
+        # so the row is centred in that share instead of filling it, and the
+        # share shows up as dead space above and below it. Anchoring the row
+        # gives that height to the scrolling list, where it belongs.
+        bottom_box.set_vexpand(False)
 
-        # Wrap main_box in a scrolled window to ensure all content fits
-        scrolled = Gtk.ScrolledWindow()
-        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        scrolled.add(main_box)
-        self.content.add(scrolled)
+        if _portrait:
+            # Portrait: only the slot-card area scrolls.  Top controls and bottom
+            # buttons sit outside the scroll and are always on screen.
+            slot_scroll = Gtk.ScrolledWindow()
+            slot_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            slot_scroll.set_overlay_scrolling(False)
+            slot_scroll.set_vexpand(True)
+            # Do NOT propagate child natural width — prevents label updates from
+            # widening slot_scroll and pushing the scrollbar off-screen.
+            slot_scroll.set_propagate_natural_width(False)
+            slot_scroll.add(self.content_area)
+            main_box.pack_start(slot_scroll, True, True, 0)
+            main_box.pack_start(bottom_box, False, False, 0)
+            # Wrap in an outer ScrolledWindow with NEVER horizontal policy, identical
+            # to the landscape path.  This constrains main_box to the allocated width
+            # and prevents any label update from causing horizontal re-expansion.
+            outer = Gtk.ScrolledWindow()
+            outer.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.NEVER)
+            # Critical: with NEVER horizontal policy GTK3 still propagates the
+            # child's full natural width upward by default.  When any label updates
+            # to wider text the layout re-negotiates and pushes the scrollbar
+            # off-screen.  These three flags lock outer to its allocated width.
+            outer.set_propagate_natural_width(False)
+            outer.set_propagate_natural_height(False)
+            outer.set_hexpand(True)
+            outer.set_vexpand(True)
+            outer.add(main_box)
+            self.content.add(outer)
+        else:
+            main_box.pack_start(self.content_area, True, True, 0)
+            main_box.pack_start(bottom_box, False, False, 0)
+            scroll = Gtk.ScrolledWindow()
+            scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            # A touchscreen never hovers, so an overlay scrollbar is never
+            # shown: the list scrolls by swipe with nothing to say it can.
+            scroll.set_overlay_scrolling(False)
+            scroll.add(main_box)
+            self.content.add(scroll)
 
         self.display_current_instance()
         self.content.show_all()
         self._update_ace_pro_sensitivity(self.ace_pro_enabled)
+
+        # Fetch fresh slot data immediately so the user doesn't see stale "Empty" cards.
+        self.refresh_all_instances()
 
     def _update_ace_pro_sensitivity(self, enabled):
         """Gray out / restore all controls except the ACE Pro switch itself."""
@@ -790,7 +1010,7 @@ class Panel(ScreenPanel):
 
         if update_widget and hasattr(self, 'match_mode_button'):
             self.match_mode_button.set_label(label_map.get(mode, "Exact"))
-            # Do not set a fixed size here; rely on the size set in create_main_screen
+            self.match_mode_button.set_size_request(self._match_mode_width, 32)
             # Only rebuild popover if it doesn't exist yet
             if not hasattr(self, 'match_mode_popover') or self.match_mode_popover is None:
                 self._build_match_mode_popover()
@@ -831,6 +1051,7 @@ class Panel(ScreenPanel):
     def on_ace_pro_toggled(self, switch, gparam):
         """Handle ACE Pro enable/disable toggle."""
         self.ace_pro_enabled = switch.get_active()
+        self._mark_pending_toggle_state("ace_pro_enabled", self.ace_pro_enabled)
         if self.ace_pro_enabled:
             self.ace_pro_status.set_markup('<span foreground="green"><b>On</b></span>')
             self._send_gcode("SET_PIN PIN=ACE_Pro VALUE=1")
@@ -846,6 +1067,7 @@ class Panel(ScreenPanel):
     def on_endless_spool_toggled(self, switch, gparam):
         """Handle Endless Spool toggle"""
         self.endless_spool_enabled = switch.get_active()
+        self._mark_pending_toggle_state("endless_spool_enabled", self.endless_spool_enabled)
 
         # Update status label
         if self.endless_spool_enabled:
@@ -882,7 +1104,10 @@ class Panel(ScreenPanel):
             # Update button label
             if hasattr(self, 'instance_toggle_btn'):
                 total = len(self.ace_instances)
-                label = f"ACE {self.current_instance} ({self.current_instance + 1} of {total})"
+                if self._is_portrait():
+                    label = f"ACE {self.current_instance + 1}/{total}"
+                else:
+                    label = f"ACE {self.current_instance} ({self.current_instance + 1} of {total})"
                 self.instance_toggle_btn.set_label(label)
 
             self.display_current_instance()
@@ -925,14 +1150,23 @@ class Panel(ScreenPanel):
         instance['slot_tool_labels'].clear()
 
         instance_ui = self._create_instance_ui(self.current_instance)
-        self.content_area.pack_start(instance_ui, True, True, 0)
+        portrait = self._is_portrait()
+        # In portrait the slots must NOT expand to fill available space —
+        # they must keep their natural height so the scroll area overflows
+        # and the scrollbar activates.
+        self.content_area.pack_start(instance_ui, not portrait, not portrait, 0)
         self.content_area.show_all()
         self.update_slot_loaded_states()
 
     def _create_instance_ui(self, instance_id):
-        instance_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=15)
+        instance_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
 
-        slots_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        portrait = self._is_portrait()
+
+        if portrait:
+            slots_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        else:
+            slots_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
         slots_box.set_homogeneous(True)
 
         instance = self.instance_data[instance_id]
@@ -944,14 +1178,16 @@ class Panel(ScreenPanel):
 
         for local_slot in range(4):
             global_tool = instance['tool_offset'] + local_slot
-            slot_btn = self._create_slot_button(instance_id, local_slot, global_tool)
-            slots_box.pack_start(slot_btn, True, True, 0)
+            slot_btn = self._create_slot_button(instance_id, local_slot, global_tool, portrait=portrait)
+            # In portrait: don't expand slots — natural height drives scroll overflow
+            slots_box.pack_start(slot_btn, not portrait, not portrait, 0)
 
+        # In portrait mode let the slots fill the available vertical space
         instance_box.pack_start(slots_box, False, False, 0)
 
         return instance_box
 
-    def _create_slot_button(self, instance_id, local_slot, global_tool):
+    def _create_slot_button(self, instance_id, local_slot, global_tool, portrait=False):
         slot_btn = Gtk.EventBox()
         slot_btn.get_style_context().add_class("ace_slot_button")
 
@@ -960,51 +1196,106 @@ class Panel(ScreenPanel):
         if slot_data['status'] == 'empty':
             slot_btn.get_style_context().add_class("ace_slot_empty")
 
-        slot_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
-        slot_box.set_margin_left(5)
-        slot_box.set_margin_right(5)
-        slot_box.set_margin_top(5)
-        slot_box.set_margin_bottom(5)
+        if portrait:
+            # ── Portrait layout: horizontal row per slot ──────────────────────
+            # [color_box | tool_label + material/temp | gear_btn]
+            # Explicit height so GTK can compute a reliable natural size for the
+            # content area and the outer ScrolledWindow scrolls correctly.
+            slot_btn.set_size_request(-1, 64)
+            slot_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            slot_box.set_margin_left(6)
+            slot_box.set_margin_right(6)
+            slot_box.set_margin_top(4)
+            slot_box.set_margin_bottom(4)
 
-        # Header row: tool label + compact gear button for config
-        header_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+            # Color swatch on the left
+            color_box = Gtk.EventBox()
+            color_box.set_size_request(44, 44)
+            color_box.get_style_context().add_class("ace_color_preview")
+            color_box.set_valign(Gtk.Align.CENTER)
+            display_color = slot_data['color'] if slot_data['status'] == 'ready' else [0, 0, 0]
+            self.set_slot_color(color_box, display_color)
+            slot_box.pack_start(color_box, False, False, 0)
 
-        tool_label = Gtk.Label(label=self._format_tool_label(global_tool, slot_data))
-        tool_label.get_style_context().add_class("description")
-        tool_label.set_halign(Gtk.Align.START)
-        header_row.pack_start(tool_label, True, True, 0)
+            # Info column (tool label + material/temp)
+            info_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            info_box.set_valign(Gtk.Align.CENTER)
 
-        # Use bundled filament icon to indicate load/unload action
-        gear_btn = self._gtk.Button("filament", None, "color2")
-        gear_btn.set_size_request(32, 32)
-        gear_btn.set_halign(Gtk.Align.END)
-        # Gear now triggers load/unload (previous slot tap behavior)
-        gear_btn.connect("clicked", self.on_slot_gear_clicked, instance_id, local_slot)
-        header_row.pack_start(gear_btn, False, False, 0)
+            tool_label = Gtk.Label()
+            tool_label.set_markup(self._format_tool_label_markup(global_tool, slot_data))
+            tool_label.get_style_context().add_class("description")
+            tool_label.set_halign(Gtk.Align.START)
+            tool_label.set_line_wrap(False)
+            info_box.pack_start(tool_label, False, False, 0)
 
-        slot_box.pack_start(header_row, False, False, 0)
+            slot_label = Gtk.Label()
+            slot_label.set_halign(Gtk.Align.START)
+            if slot_data['status'] == 'ready' and slot_data['material']:
+                slot_label.set_text(f"{slot_data['material']}  {slot_data['temp']}°C")
+            else:
+                slot_label.set_text("Empty")
+            info_box.pack_start(slot_label, False, False, 0)
 
-        # Color indicator (use gray for empty slots to keep alignment)
-        color_box = Gtk.EventBox()
-        color_box.set_size_request(60, 40)
-        color_box.get_style_context().add_class("ace_color_preview")
-        display_color = slot_data['color'] if slot_data['status'] == 'ready' else [0, 0, 0]
-        self.set_slot_color(color_box, display_color)
-        slot_box.pack_start(color_box, False, False, 0)
+            slot_box.pack_start(info_box, False, False, 0)
 
-        # Material/Temp label - READ FROM INVENTORY!
-        slot_label = Gtk.Label()
-        slot_label.set_line_wrap(True)
-        slot_label.set_justify(Gtk.Justification.CENTER)
+            # Gear / filament button on the right — pack_end so it stays at the
+            # right edge without needing info_box to expand.
+            gear_btn = self._gtk.Button("filament", None, "color2")
+            gear_btn.set_size_request(48, 48)
+            gear_btn.set_halign(Gtk.Align.END)
+            gear_btn.set_valign(Gtk.Align.CENTER)
+            gear_btn.connect("clicked", self.on_slot_gear_clicked, instance_id, local_slot)
+            slot_box.pack_end(gear_btn, False, False, 0)
 
-        # Set initial text from inventory
-        if slot_data['status'] == 'ready' and slot_data['material']:
-            slot_label.set_text(f"{slot_data['material']}\n{slot_data['temp']}°C")
         else:
-            # Keep two lines so rows stay aligned with loaded slots
-            slot_label.set_text("Empty\n ")
+            # ── Landscape layout: vertical card per slot (original) ───────────
+            slot_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+            slot_box.set_margin_left(3)
+            slot_box.set_margin_right(3)
+            slot_box.set_margin_top(3)
+            slot_box.set_margin_bottom(3)
 
-        slot_box.pack_start(slot_label, False, False, 0)
+            # Header row: tool label + compact gear button for config
+            header_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+
+            tool_label = Gtk.Label()
+            tool_label.set_markup(self._format_tool_label_markup(global_tool, slot_data))
+            tool_label.get_style_context().add_class("description")
+            tool_label.set_halign(Gtk.Align.START)
+            tool_label.set_line_wrap(False)
+            header_row.pack_start(tool_label, True, True, 0)
+
+            # Use bundled filament icon to indicate load/unload action
+            gear_btn = self._gtk.Button("filament", None, "color2")
+            gear_btn.set_size_request(28, 28)
+            gear_btn.set_halign(Gtk.Align.END)
+            # Gear now triggers load/unload (previous slot tap behavior)
+            gear_btn.connect("clicked", self.on_slot_gear_clicked, instance_id, local_slot)
+            header_row.pack_start(gear_btn, False, False, 0)
+
+            slot_box.pack_start(header_row, False, False, 0)
+
+            # Color indicator (use gray for empty slots to keep alignment)
+            color_box = Gtk.EventBox()
+            color_box.set_size_request(50, 28)
+            color_box.get_style_context().add_class("ace_color_preview")
+            display_color = slot_data['color'] if slot_data['status'] == 'ready' else [0, 0, 0]
+            self.set_slot_color(color_box, display_color)
+            slot_box.pack_start(color_box, False, False, 0)
+
+            # Material/Temp label - READ FROM INVENTORY!
+            slot_label = Gtk.Label()
+            slot_label.set_line_wrap(True)
+            slot_label.set_justify(Gtk.Justification.CENTER)
+
+            # Set initial text from inventory
+            if slot_data['status'] == 'ready' and slot_data['material']:
+                slot_label.set_text(f"{slot_data['material']}\n{slot_data['temp']}°C")
+            else:
+                # Keep two lines so rows stay aligned with loaded slots
+                slot_label.set_text("Empty\n ")
+
+            slot_box.pack_start(slot_label, False, False, 0)
 
         slot_btn.add(slot_box)
         # Slot tap now opens config (previous gear behavior)
@@ -1028,16 +1319,38 @@ class Panel(ScreenPanel):
 
         return slot_btn
 
+    def _is_portrait(self):
+        """Return True when the display height exceeds its width (portrait orientation)."""
+        try:
+            screen = Gdk.Screen.get_default()
+            return screen.get_height() > screen.get_width()
+        except Exception:
+            return False
+
     def set_slot_color(self, color_box, rgb_color):
         """Set the color of a slot's color indicator"""
         r, g, b = rgb_color
         color = Gdk.RGBA(r/255.0, g/255.0, b/255.0, 1.0)
         color_box.override_background_color(Gtk.StateFlags.NORMAL, color)
 
+    def _load_tool(self, global_tool):
+        self._send_gcode(f"T{global_tool}")
+        self._screen.show_popup_message(f"Loading T{global_tool}...", 1)
+
     def _format_tool_label(self, global_tool, slot_data):
-        """Return tool label with RFID marker when applicable."""
-        suffix = " (RFID)" if slot_data.get('rfid') else ""
-        return f"T{global_tool}{suffix}"
+        """Return tool label; RFID shown on second line when applicable."""
+        rfid = " (RFID)" if slot_data.get('rfid') else ""
+        return f"T{global_tool}{rfid}"
+
+    def _format_tool_label_markup(self, global_tool, slot_data, loaded=False):
+        """Return pango markup for tool label with RFID on its own smaller line."""
+        if slot_data.get('rfid'):
+            if loaded:
+                return f'<b><span foreground="#4CAF50">T{global_tool}</span></b>\n<span size="small" foreground="#4CAF50">(RFID)</span>'
+            return f'<b>T{global_tool}</b>\n<span size="small" foreground="#aaaaaa">(RFID)</span>'
+        if loaded:
+            return f'<b><span foreground="#4CAF50">T{global_tool}</span></b>'
+        return f'T{global_tool}'
 
     def _set_slot_visual_state(self, instance_id, local_slot, is_ready):
         """Dim empty slots to make them less prominent."""
@@ -1064,9 +1377,10 @@ class Panel(ScreenPanel):
             logging.debug("ACE: Failed to set slot visual state", exc_info=True)
 
     def update_slot_loaded_states(self):
-        """Update all slot loaded states based on ace_current_index"""
+        """Update all slot loaded states based on ace_current_index / ace_target_index"""
         current_loaded = self.get_current_loaded_slot()
-        logging.info(f"ACE: Updating loaded states, current: {current_loaded}")
+        target_tool = getattr(self, 'target_tool_index', -1)
+        logging.info(f"ACE: Updating loaded states, current: {current_loaded}, target: {target_tool}")
 
         for instance_id in self.ace_instances:
             instance = self.instance_data[instance_id]
@@ -1083,15 +1397,22 @@ class Panel(ScreenPanel):
                 global_tool = instance['tool_offset'] + local_slot
                 slot_btn = instance['slot_buttons'][local_slot]
                 is_loaded = (current_loaded == global_tool)
+                # Only shown while the toolchange is unconfirmed (target differs
+                # from the confirmed current tool); clears once they match again.
+                is_target = (target_tool != -1 and target_tool == global_tool and not is_loaded)
 
                 # Remove all state classes
                 slot_btn.get_style_context().remove_class("ace_slot_loaded")
                 slot_btn.get_style_context().remove_class("ace_slot_empty")
+                slot_btn.get_style_context().remove_class("ace_slot_target")
 
                 # Add appropriate class
                 if is_loaded:
                     slot_btn.get_style_context().add_class("ace_slot_loaded")
                     logging.info(f"ACE: Marked T{global_tool} as LOADED")
+                elif is_target:
+                    slot_btn.get_style_context().add_class("ace_slot_target")
+                    logging.info(f"ACE: Marked T{global_tool} as TARGET (unconfirmed)")
                 else:
                     slot_data = instance['inventory'][local_slot]
                     if slot_data['status'] == 'empty':
@@ -1110,23 +1431,25 @@ class Panel(ScreenPanel):
                 # Bold + green tool label when loaded, plain otherwise
                 if local_slot < len(tool_labels) and tool_labels[local_slot]:
                     slot_data = instance['inventory'][local_slot]
-                    base_text = self._format_tool_label(global_tool, slot_data)
-                    if is_loaded:
-                        tool_labels[local_slot].set_markup(
-                            f'<b><span foreground="#4CAF50">{base_text}</span></b>'
-                        )
-                    else:
-                        tool_labels[local_slot].set_text(base_text)
+                    tool_labels[local_slot].set_markup(
+                        self._format_tool_label_markup(global_tool, slot_data, loaded=is_loaded)
+                    )
 
         # Update status label (if it exists)
         if hasattr(self, 'status_label'):
-            if current_loaded != -1:
+            target = getattr(self, 'target_tool_index', -1)
+            if target != -1 and target != current_loaded:
+                self.status_label.set_text(f"ACE: Toolchange to T{target} unconfirmed")
+            elif current_loaded != -1:
                 self.status_label.set_text(f"ACE: Tool T{current_loaded} Loaded")
             else:
                 self.status_label.set_text("ACE: No Tool Loaded")
 
     def on_slot_clicked(self, widget, event, instance_id, local_slot):
         """Handle slot button clicks (legacy load/unload behavior)."""
+        if not self.printer_tools_known:
+            self._screen.show_popup_message("Waiting for printer status...", 1)
+            return
         if not self._require_ready_slot(instance_id, local_slot):
             return
         global_tool = self.instance_data[instance_id]['tool_offset'] + local_slot
@@ -1201,18 +1524,14 @@ class Panel(ScreenPanel):
         label.set_line_wrap(True)
         label.set_justify(Gtk.Justification.CENTER)
 
-        buttons = [
-            {"name": "Cancel", "response": Gtk.ResponseType.CANCEL},
-            {"name": "Load", "response": Gtk.ResponseType.OK}
-        ]
+        buttons = self._slot_dialog_buttons("Load")
 
         def load_response(dialog, response_id):
             self._gtk.remove_dialog(dialog)
             if response_id == Gtk.ResponseType.OK:
-                self._send_gcode(f"T{global_tool}")
-                self._screen.show_popup_message(
-                    f"Loading T{global_tool}...", 1
-                )
+                self._load_tool(global_tool)
+            elif response_id == RESP_FORCE_UNLOAD:
+                self._force_unload(global_tool)
 
         self._gtk.Dialog(f"Load Tool T{global_tool}", buttons, label, load_response)
 
@@ -1241,8 +1560,7 @@ class Panel(ScreenPanel):
         are still used rather than silently dropping the action.
         """
         try:
-            klippy = getattr(getattr(self._screen, "_ws", None), "klippy", None)
-            direct_ws = getattr(klippy, "_ws", None) if klippy else None
+            direct_ws = getattr(self._screen, "_ws", None)
             if callable(getattr(direct_ws, "send_method", None)):
                 def _cb(response, *_):
                     try:
@@ -1353,8 +1671,7 @@ class Panel(ScreenPanel):
             def inconsistency_response(dialog, response_id):
                 self._gtk.remove_dialog(dialog)
                 if response_id == _RESP_LOAD:
-                    self._send_gcode(f"T{global_tool}")
-                    self._screen.show_popup_message(f"Loading T{global_tool}...", 1)
+                    self._load_tool(global_tool)
                 elif response_id == _RESP_UNLOAD:
                     self._send_gcode("TR")
                     self._screen.show_popup_message("Unloading...", 1)
@@ -1372,18 +1689,35 @@ class Panel(ScreenPanel):
         label.set_line_wrap(True)
         label.set_justify(Gtk.Justification.CENTER)
 
-        buttons = [
-            {"name": "Cancel", "response": Gtk.ResponseType.CANCEL},
-            {"name": "Unload", "response": Gtk.ResponseType.OK}
-        ]
+        buttons = self._slot_dialog_buttons("Unload")
 
         def unload_response(dialog, response_id):
             self._gtk.remove_dialog(dialog)
             if response_id == Gtk.ResponseType.OK:
                 self._send_gcode("TR")
                 self._screen.show_popup_message("Unloading...", 1)
+            elif response_id == RESP_FORCE_UNLOAD:
+                self._force_unload(global_tool)
 
         self._gtk.Dialog(f"Unload Tool T{global_tool}", buttons, label, unload_response)
+
+    def _slot_dialog_buttons(self, action):
+        """Cancel, the dialog's own action (Load or Unload), and Force Unload:
+        the slot's filament out through ACE_SMART_UNLOAD TOOL=, whatever the
+        driver has on record. On both dialogs, since a filament the driver
+        lost track of shows its slot as not loaded."""
+        return [
+            {"name": "Cancel", "response": Gtk.ResponseType.CANCEL},
+            {"name": action, "response": Gtk.ResponseType.OK},
+            {"name": "Force Unload", "response": RESP_FORCE_UNLOAD},
+        ]
+
+    def _force_unload(self, tool):
+        cmd = f"ACE_SMART_UNLOAD TOOL={tool}"
+        if self._send_gcode(cmd):
+            self._screen.show_popup_message(f"Force unload T{tool}...", 1)
+        else:
+            self._screen.show_popup_message("Failed to send force unload", 2)
 
     def show_slot_settings(self, widget, instance_id, local_slot):
         """Show slot configuration screen"""
@@ -1543,10 +1877,10 @@ class Panel(ScreenPanel):
 
         # Main container
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        main_box.set_margin_left(5)
-        main_box.set_margin_right(5)
-        main_box.set_margin_top(5)
-        main_box.set_margin_bottom(5)
+        main_box.set_margin_left(10)
+        main_box.set_margin_right(10)
+        main_box.set_margin_top(10)
+        main_box.set_margin_bottom(10)
 
         # Title
         title_label = Gtk.Label(label="ACE Dryer Control")
@@ -1556,7 +1890,7 @@ class Panel(ScreenPanel):
 
         # Per-instance dryer controls
         instances_box = Gtk.Box(
-            orientation=Gtk.Orientation.VERTICAL, spacing=10
+            orientation=Gtk.Orientation.VERTICAL, spacing=15
         )
         instances_box.set_margin_top(5)
         instances_box.set_margin_bottom(5)
@@ -1565,49 +1899,104 @@ class Panel(ScreenPanel):
             instance_frame = self._create_dryer_instance_control(instance_id)
             instances_box.pack_start(instance_frame, False, False, 0)
 
-        main_box.pack_start(instances_box, False, False, 0)
-
-        # Bottom buttons
-        button_box = Gtk.Box(
-            orientation=Gtk.Orientation.HORIZONTAL, spacing=5
-        )
-        button_box.set_homogeneous(True)
-
-        # Instance Selection button
+        # Bottom buttons — portrait uses a 2×2 compact grid (4 self._gtk.Button
+        # icons in one horizontal row are too wide and too tall for portrait).
+        _portrait = self._is_portrait()
         selection_label = self._get_selection_label()
-        self._dryer_selection_btn = self._gtk.Button(
-            "arrow-right", selection_label, "color2"
-        )
-        self._dryer_selection_btn.set_size_request(-1, 50)
-        self._dryer_selection_btn.connect("clicked", self.cycle_selected_dryer_instance)
-        button_box.pack_start(self._dryer_selection_btn, True, True, 0)
 
-        # Start Dryer button
-        start_btn = self._gtk.Button(
-            "heat-up", "Start Dryer", "color1"
-        )
-        start_btn.set_size_request(-1, 50)
-        start_btn.connect("clicked", self.start_selected_dryer)
-        button_box.pack_start(start_btn, True, True, 0)
+        if _portrait:
+            button_box = Gtk.Grid()
+            button_box.set_column_homogeneous(True)
+            button_box.set_row_homogeneous(True)
+            button_box.set_row_spacing(4)
+            button_box.set_column_spacing(4)
 
-        # Stop Dryer button
-        stop_btn = self._gtk.Button("cancel", "Stop Dryer", "color4")
-        stop_btn.set_size_request(-1, 50)
-        stop_btn.connect("clicked", self.stop_selected_dryer)
-        button_box.pack_start(stop_btn, True, True, 0)
+            self._dryer_selection_btn = Gtk.Button(label=selection_label)
+            self._dryer_selection_btn.get_style_context().add_class("color2")
+            self._dryer_selection_btn.get_style_context().add_class("ace_compact_btn")
+            self._dryer_selection_btn.set_size_request(-1, 40)
+            self._dryer_selection_btn.connect("clicked", self.cycle_selected_dryer_instance)
 
-        # Back button
-        back_btn = self._gtk.Button("arrow-left", "Back", "color3")
-        back_btn.set_size_request(-1, 50)
-        back_btn.connect("clicked", lambda w: self.return_to_main_screen())
-        button_box.pack_start(back_btn, True, True, 0)
+            start_btn = Gtk.Button(label="Start Dryer")
+            start_btn.get_style_context().add_class("color1")
+            start_btn.get_style_context().add_class("ace_compact_btn")
+            start_btn.set_size_request(-1, 40)
+            start_btn.connect("clicked", self.start_selected_dryer)
 
-        main_box.pack_start(button_box, False, False, 0)
+            stop_btn = Gtk.Button(label="Stop Dryer")
+            stop_btn.get_style_context().add_class("color4")
+            stop_btn.get_style_context().add_class("ace_compact_btn")
+            stop_btn.set_size_request(-1, 40)
+            stop_btn.connect("clicked", self.stop_selected_dryer)
 
-        scrolled = Gtk.ScrolledWindow()
-        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scrolled.add(main_box)
-        self.content.add(scrolled)
+            back_btn = Gtk.Button(label="Back")
+            back_btn.get_style_context().add_class("color3")
+            back_btn.get_style_context().add_class("ace_compact_btn")
+            back_btn.set_size_request(-1, 40)
+            back_btn.connect("clicked", lambda w: self.return_to_main_screen())
+
+            button_box.attach(self._dryer_selection_btn, 0, 0, 1, 1)
+            button_box.attach(start_btn, 1, 0, 1, 1)
+            button_box.attach(stop_btn, 0, 1, 1, 1)
+            button_box.attach(back_btn, 1, 1, 1, 1)
+        else:
+            button_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            button_box.set_homogeneous(True)
+
+            self._dryer_selection_btn = self._gtk.Button(
+                "arrow-right", selection_label, "color2"
+            )
+            self._dryer_selection_btn.set_size_request(-1, 50)
+            self._dryer_selection_btn.connect("clicked", self.cycle_selected_dryer_instance)
+            button_box.pack_start(self._dryer_selection_btn, True, True, 0)
+
+            start_btn = self._gtk.Button("heat-up", "Start Dryer", "color1")
+            start_btn.set_size_request(-1, 50)
+            start_btn.connect("clicked", self.start_selected_dryer)
+            button_box.pack_start(start_btn, True, True, 0)
+
+            stop_btn = self._gtk.Button("cancel", "Stop Dryer", "color4")
+            stop_btn.set_size_request(-1, 50)
+            stop_btn.connect("clicked", self.stop_selected_dryer)
+            button_box.pack_start(stop_btn, True, True, 0)
+
+            back_btn = self._gtk.Button("arrow-left", "Back", "color3")
+            back_btn.set_size_request(-1, 50)
+            back_btn.connect("clicked", lambda w: self.return_to_main_screen())
+            button_box.pack_start(back_btn, True, True, 0)
+
+        # Anchor the button row: see the note in create_main_screen.
+        button_box.set_vexpand(False)
+
+        if _portrait:
+            # Only the instance-cards area scrolls; buttons stay anchored below.
+            inner_scroll = Gtk.ScrolledWindow()
+            inner_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            inner_scroll.set_overlay_scrolling(False)
+            inner_scroll.set_vexpand(True)
+            inner_scroll.set_propagate_natural_width(False)
+            inner_scroll.add(instances_box)
+            main_box.pack_start(inner_scroll, True, True, 0)
+            main_box.pack_start(button_box, False, False, 0)
+            outer = Gtk.ScrolledWindow()
+            outer.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.NEVER)
+            outer.set_propagate_natural_width(False)
+            outer.set_propagate_natural_height(False)
+            outer.set_hexpand(True)
+            outer.set_vexpand(True)
+            outer.add(main_box)
+            self.content.add(outer)
+        else:
+            landscape_scroll = Gtk.ScrolledWindow()
+            landscape_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            landscape_scroll.set_overlay_scrolling(False)
+            landscape_scroll.set_vexpand(True)
+            landscape_scroll.set_propagate_natural_width(False)
+            landscape_scroll.add(instances_box)
+            main_box.pack_start(landscape_scroll, True, True, 0)
+            main_box.pack_start(button_box, False, False, 0)
+            self.content.add(main_box)
+
         self.content.show_all()
         
         # Update frame labels to show current selection
@@ -1642,19 +2031,29 @@ class Panel(ScreenPanel):
         for child in self.content.get_children():
             self.content.remove(child)
 
-        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
         main_box.set_margin_left(5)
         main_box.set_margin_right(5)
         main_box.set_margin_top(5)
         main_box.set_margin_bottom(5)
 
-        title_label = Gtk.Label(label="Utilities")
-        title_label.get_style_context().add_class("description")
+        # Title row with compact back button on the left
+        title_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+
+        back_btn = Gtk.Button(label="◀ Back")
+        back_btn.set_size_request(90, 32)
+        back_btn.connect("clicked", lambda w: self.return_to_main_screen())
+        title_row.pack_start(back_btn, False, False, 0)
+
+        title_label = Gtk.Label()
         title_label.set_markup("<big><b>Utilities</b></big>")
-        main_box.pack_start(title_label, False, False, 5)
+        title_label.set_hexpand(True)
+        title_row.pack_start(title_label, True, True, 0)
+
+        main_box.pack_start(title_row, False, False, 2)
 
         # Tool selection row
-        selector_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        selector_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         selector_row.set_homogeneous(False)
 
         selector_label = Gtk.Label(label="Tool:")
@@ -1672,7 +2071,7 @@ class Panel(ScreenPanel):
         tool_button.set_relief(Gtk.ReliefStyle.NORMAL)
         tool_button.get_style_context().add_class("color3")
         tool_button.get_style_context().add_class("ace_tool_selector_button")
-        tool_button.set_size_request(180, 48)
+        tool_button.set_size_request(200, 48)
 
         popover = Gtk.Popover.new(tool_button)
         popover.set_position(Gtk.PositionType.BOTTOM)
@@ -1699,9 +2098,9 @@ class Panel(ScreenPanel):
         if active_index < 0:
             listbox.select_row(none_row)
 
-        for tool_index in range(self.total_slots):
-            instance_id = tool_index // 4
-            local_slot = tool_index % 4
+        for slot_number in range(self.total_slots):
+            instance_id, local_slot = divmod(slot_number, 4)
+            tool_index = self.printer_tool_offset + slot_number
             slot_status = self.instance_data.get(instance_id, {}).get('inventory', [{}] * 4)[local_slot].get('status', 'ready')
             is_empty = slot_status == 'empty'
             label_text = f"T{tool_index}" if not is_empty else f"T{tool_index} (empty)"
@@ -1744,98 +2143,104 @@ class Panel(ScreenPanel):
 
         # Action buttons grid (wrapped in scroll to ensure accessibility on small screens)
         actions_grid = Gtk.Grid()
-        actions_grid.set_column_spacing(8)
-        actions_grid.set_row_spacing(8)
+        actions_grid.set_column_spacing(6)
+        actions_grid.set_row_spacing(6)
         actions_grid.set_column_homogeneous(True)
         actions_grid.set_row_homogeneous(False)
-        actions_grid.set_margin_top(4)
-        actions_grid.set_margin_bottom(4)
-        actions_grid.set_margin_left(4)
-        actions_grid.set_margin_right(4)
+        actions_grid.set_margin_top(2)
+        actions_grid.set_margin_bottom(2)
+        actions_grid.set_margin_left(2)
+        actions_grid.set_margin_right(2)
+
+        portrait = self._is_portrait()
+        compact = not portrait and self._gtk.content_width < WIDE_UTILITIES_MIN_WIDTH
 
         def add_action(button, col, row, color_class="color1"):
-            button.set_size_request(140, 70)
-            button.set_hexpand(True)
+            if portrait:
+                button.set_size_request(-1, 60)
+                button.set_hexpand(False)
+                button.set_halign(Gtk.Align.FILL)
+            else:
+                button.set_size_request(118 if compact else 160, 58)
+                button.set_hexpand(True)
             button.get_style_context().add_class(color_class)
             actions_grid.attach(button, col, row, 1, 1)
 
-        # Row 0
         btn_feed = self._gtk.Button(None, "Feed...", "color1")
         btn_feed.connect("clicked", self.show_spool_feed_input)
-        add_action(btn_feed, 0, 0, "color1")
 
         btn_retract = self._gtk.Button(None, "Retract...", "color2")
         btn_retract.connect("clicked", self.show_spool_retract_input)
-        add_action(btn_retract, 1, 0, "color2")
 
-        btn_full_unload = self._gtk.Button(None, "Full Unload", "color3")
-        btn_full_unload.connect("clicked", self.spool_full_unload)
-        add_action(btn_full_unload, 2, 3, "color3")
-
-        # Row 1
         btn_stop_feed = self._gtk.Button(None, "Stop Feed", "color1")
         btn_stop_feed.connect("clicked", self.spool_stop_feed)
-        add_action(btn_stop_feed, 0, 1, "color1")
 
         btn_stop_retract = self._gtk.Button(None, "Stop Retract", "color2")
         btn_stop_retract.connect("clicked", self.spool_stop_retract)
-        add_action(btn_stop_retract, 1, 1, "color2")
 
-        btn_rfid_enable = self._gtk.Button(None, "Enable RFID", "color4")
-        btn_rfid_enable.connect("clicked", self.spool_enable_rfid_sync)
-        add_action(btn_rfid_enable, 2, 1, "color4")
-
-        # Row 2
         btn_feed_assist_on = self._gtk.Button(None, "Enable Feed Assist", "color4")
         btn_feed_assist_on.connect("clicked", self.spool_enable_feed_assist)
-        add_action(btn_feed_assist_on, 0, 2, "color4")
+
+        btn_feed_assist_off = self._gtk.Button(None, "Disable Feed Assist", "color4")
+        btn_feed_assist_off.connect("clicked", self.spool_disable_feed_assist)
 
         btn_smart_load = self._gtk.Button(None, "Smart Load All", "color3")
         btn_smart_load.connect("clicked", self.spool_smart_load)
-        add_action(btn_smart_load, 1, 2, "color3")
-
-        btn_rfid_disable = self._gtk.Button(None, "Disable RFID", "color4")
-        btn_rfid_disable.connect("clicked", self.spool_disable_rfid_sync)
-        add_action(btn_rfid_disable, 2, 2, "color4")
-
-        # Row 3
-        btn_feed_assist_off = self._gtk.Button(None, "Disable Feed Assist", "color4")
-        btn_feed_assist_off.connect("clicked", self.spool_disable_feed_assist)
-        add_action(btn_feed_assist_off, 0, 3, "color4")
 
         btn_smart_unload = self._gtk.Button(None, "Smart Unload", "color3")
         btn_smart_unload.connect("clicked", self.spool_smart_unload)
-        add_action(btn_smart_unload, 1, 3, "color3")
+
+        btn_full_unload = self._gtk.Button(None, "Full Unload", "color3")
+        btn_full_unload.connect("clicked", self.spool_full_unload)
 
         btn_reconnect = self._gtk.Button(None, "ACE Reconnect", "color3")
         btn_reconnect.connect("clicked", self.spool_reconnect)
-        add_action(btn_reconnect, 2, 0, "color3")
+
+        btn_rfid_enable = self._gtk.Button(None, "Enable RFID", "color4")
+        btn_rfid_enable.connect("clicked", self.spool_enable_rfid_sync)
+
+        btn_rfid_disable = self._gtk.Button(None, "Disable RFID", "color4")
+        btn_rfid_disable.connect("clicked", self.spool_disable_rfid_sync)
+
+        if portrait:
+            # 1-column layout for portrait: single button per row, scrollable
+            add_action(btn_feed,           0,  0, "color1")
+            add_action(btn_stop_feed,      0,  1, "color1")
+            add_action(btn_retract,        0,  2, "color2")
+            add_action(btn_stop_retract,   0,  3, "color2")
+            add_action(btn_feed_assist_on, 0,  4, "color4")
+            add_action(btn_feed_assist_off,0,  5, "color4")
+            add_action(btn_smart_load,     0,  6, "color3")
+            add_action(btn_smart_unload,   0,  7, "color3")
+            add_action(btn_full_unload,    0,  8, "color3")
+            add_action(btn_reconnect,      0,  9, "color3")
+            add_action(btn_rfid_enable,    0, 10, "color4")
+            add_action(btn_rfid_disable,   0, 11, "color4")
+        else:
+            # Original 3-column landscape layout
+            add_action(btn_feed,           0, 0, "color1")
+            add_action(btn_retract,        1, 0, "color2")
+            add_action(btn_reconnect,      2, 0, "color3")
+            add_action(btn_stop_feed,      0, 1, "color1")
+            add_action(btn_stop_retract,   1, 1, "color2")
+            add_action(btn_rfid_enable,    2, 1, "color4")
+            add_action(btn_feed_assist_on, 0, 2, "color4")
+            add_action(btn_smart_load,     1, 2, "color3")
+            add_action(btn_rfid_disable,   2, 2, "color4")
+            add_action(btn_feed_assist_off,0, 3, "color4")
+            add_action(btn_smart_unload,   1, 3, "color3")
+            add_action(btn_full_unload,    2, 3, "color3")
 
         scroll = Gtk.ScrolledWindow()
-        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.ALWAYS)
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroll.set_overlay_scrolling(False)
         scroll.set_propagate_natural_width(True)
-        scroll.set_min_content_height(400)
         scroll.set_vexpand(True)
         scroll.set_hexpand(True)
         scroll.add(actions_grid)
-        main_box.pack_start(scroll, True, True, 5)
+        main_box.pack_start(scroll, True, True, 2)
 
-        # Bottom navigation
-        nav_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
-        nav_box.set_homogeneous(True)
-
-        back_btn = self._gtk.Button("arrow-left", "Back", "color3")
-        back_btn.set_size_request(-1, 50)
-        back_btn.connect("clicked", lambda w: self.return_to_main_screen())
-        nav_box.pack_start(back_btn, True, True, 0)
-
-        main_box.pack_end(nav_box, False, False, 0)
-
-        scrolled = Gtk.ScrolledWindow()
-        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        scrolled.add(main_box)
-        self.content.add(scrolled)
+        self.content.add(main_box)
         self.content.show_all()
 
     def return_to_spool_panel(self):
@@ -1971,14 +2376,12 @@ class Panel(ScreenPanel):
 
     def _show_spool_amount_input(self, title, callback):
         self.current_view = "spool_keypad"
-        for child in self.content.get_children():
-            self.content.remove(child)
 
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        main_box.set_margin_left(5)
-        main_box.set_margin_right(5)
-        main_box.set_margin_top(5)
-        main_box.set_margin_bottom(5)
+        main_box.set_margin_left(10)
+        main_box.set_margin_right(10)
+        main_box.set_margin_top(10)
+        main_box.set_margin_bottom(10)
 
         title_label = Gtk.Label(label=f"{title} Amount (mm)")
         title_label.get_style_context().add_class("description")
@@ -1998,12 +2401,10 @@ class Panel(ScreenPanel):
         self.spool_keypad = Keypad(
             self._screen,
             callback,
-            None,
-            self.return_to_spool_panel,
+            lambda widget: self.return_to_spool_panel(),
         )
         self.spool_keypad.clear()
-        self.spool_keypad.labels['entry'].set_text("0")
-        self.spool_keypad.show_pid(False)
+        self.spool_keypad.entry.set_text("0")
 
         main_box.pack_start(self.spool_keypad, True, True, 0)
 
@@ -2011,12 +2412,14 @@ class Panel(ScreenPanel):
         back_btn = self._gtk.Button("arrow-left", "Back", "color3")
         back_btn.set_size_request(-1, 50)
         back_btn.connect("clicked", lambda w: self.return_to_spool_panel())
+        back_btn.set_vexpand(False)  # see the note in create_main_screen
         main_box.pack_end(back_btn, False, False, 0)
 
-        scrolled = Gtk.ScrolledWindow()
-        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scrolled.add(main_box)
-        self.content.add(scrolled)
+        # Clear the previous view only after the new one built successfully,
+        # so a construction failure cannot leave an empty (black) page.
+        for child in self.content.get_children():
+            self.content.remove(child)
+        self.content.add(main_box)
         self.content.show_all()
 
     def handle_spool_feed_amount(self, amount):
@@ -2049,6 +2452,7 @@ class Panel(ScreenPanel):
 
     def _create_dryer_instance_control(self, instance_id):
         """Create dryer control UI for a single ACE instance"""
+        portrait = self._is_portrait()
         frame = Gtk.Frame()
         frame_label = Gtk.Label()
         frame_label.set_use_markup(True)  # Enable markup rendering
@@ -2057,15 +2461,15 @@ class Panel(ScreenPanel):
         frame.set_label_widget(frame_label)
         frame.get_style_context().add_class("frame-item")
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        box.set_margin_left(8)
-        box.set_margin_right(8)
-        box.set_margin_top(8)
-        box.set_margin_bottom(8)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.set_margin_left(10)
+        box.set_margin_right(10)
+        box.set_margin_top(10)
+        box.set_margin_bottom(10)
 
         # Status display
         status_box = Gtk.Box(
-            orientation=Gtk.Orientation.HORIZONTAL, spacing=5
+            orientation=Gtk.Orientation.HORIZONTAL, spacing=10
         )
 
         status_label_prefix = Gtk.Label(label="Status:")
@@ -2115,10 +2519,16 @@ class Panel(ScreenPanel):
         box.pack_start(status_box, False, False, 0)
 
         # Temperature setting
-        temp_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        # Portrait: vertical layout so the slider spans the full row width;
+        # value shown above the track (TOP) avoids clipping on the right edge.
+        temp_box = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL if portrait else Gtk.Orientation.HORIZONTAL,
+            spacing=2 if portrait else 10,
+        )
 
         temp_label = Gtk.Label(label="Target Temp:")
-        temp_label.set_size_request(80, -1)
+        if not portrait:
+            temp_label.set_size_request(100, -1)
         temp_label.set_halign(Gtk.Align.START)
         temp_box.pack_start(temp_label, False, False, 0)
 
@@ -2128,19 +2538,24 @@ class Panel(ScreenPanel):
         )
         temp_scale.set_value(45)  # Default 45°C
         temp_scale.set_draw_value(True)
-        temp_scale.set_value_pos(Gtk.PositionType.RIGHT)
-        temp_scale.set_size_request(160, -1)
+        temp_scale.set_value_pos(
+            Gtk.PositionType.TOP if portrait else Gtk.PositionType.RIGHT
+        )
+        if not portrait:
+            temp_scale.set_size_request(200, -1)
         temp_box.pack_start(temp_scale, True, True, 0)
 
         box.pack_start(temp_box, False, False, 0)
 
         # Duration setting
         duration_box = Gtk.Box(
-            orientation=Gtk.Orientation.HORIZONTAL, spacing=5
+            orientation=Gtk.Orientation.VERTICAL if portrait else Gtk.Orientation.HORIZONTAL,
+            spacing=2 if portrait else 10,
         )
 
         duration_label = Gtk.Label(label="Duration (min):")
-        duration_label.set_size_request(80, -1)
+        if not portrait:
+            duration_label.set_size_request(100, -1)
         duration_label.set_halign(Gtk.Align.START)
         duration_box.pack_start(duration_label, False, False, 0)
 
@@ -2150,8 +2565,11 @@ class Panel(ScreenPanel):
         )
         duration_scale.set_value(240)  # Default 4 hours
         duration_scale.set_draw_value(True)
-        duration_scale.set_value_pos(Gtk.PositionType.RIGHT)
-        duration_scale.set_size_request(160, -1)
+        duration_scale.set_value_pos(
+            Gtk.PositionType.TOP if portrait else Gtk.PositionType.RIGHT
+        )
+        if not portrait:
+            duration_scale.set_size_request(200, -1)
         duration_box.pack_start(duration_scale, True, True, 0)
 
         box.pack_start(duration_box, False, False, 0)
@@ -2225,7 +2643,24 @@ class Panel(ScreenPanel):
             f"TEMP={temp} DURATION={duration}"
         )
 
-        self._send_gcode(gcode)
+        logging.info(
+            "ACE: Dryer send requested: instance=%s cmd=%s",
+            instance_id,
+            gcode,
+        )
+        sent = self._send_gcode(gcode)
+        if sent:
+            logging.info(
+                "ACE: Dryer command sent: instance=%s cmd=%s",
+                instance_id,
+                gcode,
+            )
+        else:
+            logging.warning(
+                "ACE: Dryer command not sent: instance=%s cmd=%s",
+                instance_id,
+                gcode,
+            )
         self._screen.show_popup_message(
             f"Starting dryer on ACE {instance_id}\n"
             f"{temp}°C for {duration} minutes", 2
@@ -2236,7 +2671,25 @@ class Panel(ScreenPanel):
         instance_param = (
             f" INSTANCE={instance_id}" if instance_id > 0 else ""
         )
-        self._send_gcode(f"ACE_STOP_DRYING{instance_param}")
+        gcode = f"ACE_STOP_DRYING{instance_param}"
+        logging.info(
+            "ACE: Dryer stop requested: instance=%s cmd=%s",
+            instance_id,
+            gcode,
+        )
+        sent = self._send_gcode(gcode)
+        if sent:
+            logging.info(
+                "ACE: Dryer stop command sent: instance=%s cmd=%s",
+                instance_id,
+                gcode,
+            )
+        else:
+            logging.warning(
+                "ACE: Dryer stop command not sent: instance=%s cmd=%s",
+                instance_id,
+                gcode,
+            )
         self._screen.show_popup_message(
             f"Stopping dryer on ACE {instance_id}", 1
         )
@@ -2256,14 +2709,10 @@ class Panel(ScreenPanel):
                 frame_label = self._dryer_controls[instance_id]['frame_label']
                 
                 if self.selected_dryer_instance == "ALL":
-                    # When ALL is selected, show only ACE 0's controls
-                    if instance_id == 0:
-                        if frame:
-                            frame.show_all()
-                        frame_label.set_markup("<b>ALL ACEs (Temp of ACE 0 shown)</b>")
-                    else:
-                        if frame:
-                            frame.hide()
+                    # Show every instance frame so each ACE's actual temp/state is visible
+                    if frame:
+                        frame.show_all()
+                    frame_label.set_markup(f"<b>ACE {instance_id}</b>")
                 elif self.selected_dryer_instance == instance_id:
                     # Show only selected frame with highlight
                     if frame:
@@ -2318,9 +2767,25 @@ class Panel(ScreenPanel):
                 instance_param = (
                     f" INSTANCE={instance_id}" if instance_id > 0 else ""
                 )
-                self._send_gcode(
-                    f"ACE_START_DRYING{instance_param} TEMP={temp} DURATION={duration}"
+                gcode = f"ACE_START_DRYING{instance_param} TEMP={temp} DURATION={duration}"
+                logging.info(
+                    "ACE: Dryer send requested: instance=%s cmd=%s",
+                    instance_id,
+                    gcode,
                 )
+                sent = self._send_gcode(gcode)
+                if sent:
+                    logging.info(
+                        "ACE: Dryer command sent: instance=%s cmd=%s",
+                        instance_id,
+                        gcode,
+                    )
+                else:
+                    logging.warning(
+                        "ACE: Dryer command not sent: instance=%s cmd=%s",
+                        instance_id,
+                        gcode,
+                    )
 
             self._screen.show_popup_message(
                 f"Starting all {len(self.ace_instances)} dryers", 1
@@ -2339,9 +2804,25 @@ class Panel(ScreenPanel):
             instance_param = (
                 f" INSTANCE={instance_id}" if instance_id > 0 else ""
             )
-            self._send_gcode(
-                f"ACE_START_DRYING{instance_param} TEMP={temp} DURATION={duration}"
+            gcode = f"ACE_START_DRYING{instance_param} TEMP={temp} DURATION={duration}"
+            logging.info(
+                "ACE: Dryer send requested: instance=%s cmd=%s",
+                instance_id,
+                gcode,
             )
+            sent = self._send_gcode(gcode)
+            if sent:
+                logging.info(
+                    "ACE: Dryer command sent: instance=%s cmd=%s",
+                    instance_id,
+                    gcode,
+                )
+            else:
+                logging.warning(
+                    "ACE: Dryer command not sent: instance=%s cmd=%s",
+                    instance_id,
+                    gcode,
+                )
             
             self._screen.show_popup_message(
                 f"Starting dryer on ACE {instance_id}\n{temp}°C for {duration} minutes", 2
@@ -2355,7 +2836,25 @@ class Panel(ScreenPanel):
                 instance_param = (
                     f" INSTANCE={instance_id}" if instance_id > 0 else ""
                 )
-                self._send_gcode(f"ACE_STOP_DRYING{instance_param}")
+                gcode = f"ACE_STOP_DRYING{instance_param}"
+                logging.info(
+                    "ACE: Dryer stop requested: instance=%s cmd=%s",
+                    instance_id,
+                    gcode,
+                )
+                sent = self._send_gcode(gcode)
+                if sent:
+                    logging.info(
+                        "ACE: Dryer stop command sent: instance=%s cmd=%s",
+                        instance_id,
+                        gcode,
+                    )
+                else:
+                    logging.warning(
+                        "ACE: Dryer stop command not sent: instance=%s cmd=%s",
+                        instance_id,
+                        gcode,
+                    )
 
             self._screen.show_popup_message(
                 f"Stopping all {len(self.ace_instances)} dryers", 1
@@ -2366,7 +2865,25 @@ class Panel(ScreenPanel):
             instance_param = (
                 f" INSTANCE={instance_id}" if instance_id > 0 else ""
             )
-            self._send_gcode(f"ACE_STOP_DRYING{instance_param}")
+            gcode = f"ACE_STOP_DRYING{instance_param}"
+            logging.info(
+                "ACE: Dryer stop requested: instance=%s cmd=%s",
+                instance_id,
+                gcode,
+            )
+            sent = self._send_gcode(gcode)
+            if sent:
+                logging.info(
+                    "ACE: Dryer stop command sent: instance=%s cmd=%s",
+                    instance_id,
+                    gcode,
+                )
+            else:
+                logging.warning(
+                    "ACE: Dryer stop command not sent: instance=%s cmd=%s",
+                    instance_id,
+                    gcode,
+                )
             
             self._screen.show_popup_message(
                 f"Stopping dryer on ACE {instance_id}", 1
@@ -2385,10 +2902,6 @@ class Panel(ScreenPanel):
         slot_status = slot_data.get("status", "empty")
         current_material = slot_data.get("material", "")
 
-        # Track whether this slot should allow selecting "Empty" in the material list
-        self.config_slot_allows_empty = (
-            slot_status == "empty" or current_material in ["Empty", "", None]
-        )
 
         if (slot_status == "empty" or
                 current_material in ["Empty", "", None]):
@@ -2408,22 +2921,124 @@ class Panel(ScreenPanel):
             f"Color: {self.config_color}, Temp: {self.config_temp}"
         )
 
-        # Clear current content and create two-column layout
+        # Clear current content and create layout
         for child in self.content.get_children():
             self.content.remove(child)
 
+        _portrait = self._is_portrait()
+
+        if _portrait:
+            # Portrait: compact button rows on top, right_box full-width below.
+            main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+            main_box.set_margin_left(5)
+            main_box.set_margin_right(5)
+            main_box.set_margin_top(3)
+            main_box.set_margin_bottom(3)
+
+            # Title
+            config_title = Gtk.Label(label=f"Configure T{global_tool}")
+            config_title.get_style_context().add_class("description")
+            main_box.pack_start(config_title, False, False, 0)
+
+            if rfid_locked:
+                lock_label = Gtk.Label(
+                    label="RFID locked — disable RFID sync to edit."
+                )
+                lock_label.get_style_context().add_class("description")
+                lock_label.set_line_wrap(True)
+                main_box.pack_start(lock_label, False, False, 0)
+
+            # Row 1: Material button + color swatch+button (side by side)
+            row1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+            row1.set_homogeneous(True)
+
+            self.material_btn = Gtk.Button(label=f"Material: {self.config_material}")
+            self.material_btn.get_style_context().add_class("color1")
+            self.material_btn.get_style_context().add_class("ace_compact_btn")
+            self.material_btn.set_size_request(-1, 36)
+            self.material_btn.connect("clicked", self.show_material_selection)
+            self.material_btn.set_sensitive(not rfid_locked)
+            row1.pack_start(self.material_btn, True, True, 0)
+
+            color_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
+            self.config_color_preview = Gtk.EventBox()
+            self.config_color_preview.set_size_request(20, 36)
+            self.config_color_preview.get_style_context().add_class("ace_color_preview")
+            self.set_slot_color(self.config_color_preview, self.config_color)
+            color_row.pack_start(self.config_color_preview, False, False, 0)
+
+            self.color_btn = Gtk.Button(label="Color")
+            self.color_btn.get_style_context().add_class("color2")
+            self.color_btn.get_style_context().add_class("ace_compact_btn")
+            self.color_btn.set_size_request(-1, 36)
+            self.color_btn.connect("clicked", self.show_color_selection)
+            self.color_btn.set_sensitive(not rfid_locked)
+            color_row.pack_start(self.color_btn, True, True, 0)
+            row1.pack_start(color_row, True, True, 0)
+
+            main_box.pack_start(row1, False, False, 0)
+
+            # Row 2: Temp | Save | Cancel
+            row2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+            row2.set_homogeneous(True)
+
+            temp_display = (
+                f"Temp: {self.config_temp}\u00b0C"
+                if self.config_temp > 0
+                else "Temp: Not Set"
+            )
+            self.temp_btn = Gtk.Button(label=temp_display)
+            self.temp_btn.get_style_context().add_class("color3")
+            self.temp_btn.get_style_context().add_class("ace_compact_btn")
+            self.temp_btn.set_size_request(-1, 36)
+            self.temp_btn.connect("clicked", self.show_temperature_selection)
+            row2.pack_start(self.temp_btn, True, True, 0)
+
+            save_btn = Gtk.Button(label="\u2714 Save")
+            save_btn.get_style_context().add_class("color1")
+            save_btn.get_style_context().add_class("ace_compact_btn")
+            save_btn.set_size_request(-1, 36)
+            save_btn.connect("clicked", self.save_slot_config, instance_id, local_slot, global_tool)
+            row2.pack_start(save_btn, True, True, 0)
+
+            cancel_btn = Gtk.Button(label="\u2716 Cancel")
+            cancel_btn.get_style_context().add_class("color4")
+            cancel_btn.get_style_context().add_class("ace_compact_btn")
+            cancel_btn.set_size_request(-1, 36)
+            cancel_btn.connect("clicked", self.cancel_slot_config)
+            row2.pack_start(cancel_btn, True, True, 0)
+
+            main_box.pack_start(row2, False, False, 0)
+
+            # Selection area — right_box fills all remaining height at full width
+            self.right_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+            self.right_box.set_hexpand(True)
+            self.right_box.set_vexpand(True)
+
+            welcome_label = Gtk.Label(label="Tap an option above to configure the slot")
+            welcome_label.set_justify(Gtk.Justification.CENTER)
+            welcome_label.get_style_context().add_class("description")
+            self.right_box.pack_start(welcome_label, True, True, 0)
+
+            main_box.pack_start(self.right_box, True, True, 0)
+
+            self.content.add(main_box)
+            self.content.show_all()
+            return
+
+        # ---- Landscape: original two-column grid layout ----
         # Create main grid with two columns - compact spacing
         main_grid = Gtk.Grid()
         main_grid.set_column_homogeneous(True)
         main_grid.set_row_spacing(2)
         main_grid.set_column_spacing(1)
         main_grid.set_margin_left(5)
-        main_grid.set_margin_right(5)
+        main_grid.set_margin_right(10)
         main_grid.set_margin_top(2)
         main_grid.set_margin_bottom(1)
 
         # Left column - Configuration options (compact)
-        left_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        left_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
 
         # Compact title for left column
         config_title = Gtk.Label(label=f"Configure T{global_tool}")
@@ -2439,65 +3054,70 @@ class Panel(ScreenPanel):
             lock_label.set_max_width_chars(30)
             left_box.pack_start(lock_label, False, False, 0)
 
-        # Material selection button
-        self.material_btn = self._gtk.Button("filament", f"Material: {self.config_material}", "color1")
-        self.material_btn.set_size_request(-1, 40)
+        # Material selection button — icon left of text, stays single-line height
+        self.material_btn = self._gtk.Button("filament", f"Material: {self.config_material}", "color1",
+                                             position=Gtk.PositionType.LEFT, lines=1)
+        self.material_btn.set_vexpand(False)
+        self.material_btn.set_hexpand(True)
+        self.material_btn.set_size_request(-1, 55)
         self.material_btn.connect("clicked", self.show_material_selection)
         self.material_btn.set_sensitive(not rfid_locked)
-        left_box.pack_start(self.material_btn, False, False, 0)
+        left_box.pack_start(self.material_btn, True, True, 0)
 
         # Color selection button with preview
-        color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        color_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
 
         # Color preview with current color
         self.config_color_preview = Gtk.EventBox()
-        self.config_color_preview.set_size_request(30, 30)
+        self.config_color_preview.set_size_request(24, 55)
         self.config_color_preview.get_style_context().add_class("ace_color_preview")
         self.set_slot_color(self.config_color_preview, self.config_color)
         color_box.pack_start(self.config_color_preview, False, False, 0)
 
         # Color button
-        self.color_btn = self._gtk.Button("palette", "Select Color", "color2")
-        self.color_btn.set_size_request(-1, 40)
+        self.color_btn = Gtk.Button(label="Select Color")
+        self.color_btn.get_style_context().add_class("color2")
+        self.color_btn.set_size_request(-1, 55)
         self.color_btn.connect("clicked", self.show_color_selection)
         self.color_btn.set_sensitive(not rfid_locked)
         color_box.pack_start(self.color_btn, True, True, 0)
 
-        left_box.pack_start(color_box, False, False, 0)
+        left_box.pack_start(color_box, True, True, 0)
 
         # Temperature selection button - show "Not Set" if 0
         temp_display = (
-            f"Temperature: {self.config_temp}°C"
+            f"Temp: {self.config_temp}°C"
             if self.config_temp > 0
-            else "Temperature: Not Set"
+            else "Temp: Not Set"
         )
-        self.temp_btn = self._gtk.Button(
-            "heat-up", temp_display, "color3"
-        )
-        self.temp_btn.set_size_request(-1, 40)
+        self.temp_btn = Gtk.Button(label=temp_display)
+        self.temp_btn.get_style_context().add_class("color3")
+        self.temp_btn.set_size_request(-1, 55)
         self.temp_btn.connect("clicked", self.show_temperature_selection)
-        left_box.pack_start(self.temp_btn, False, False, 0)
+        left_box.pack_start(self.temp_btn, True, True, 0)
 
         # Compact action buttons
-        action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        action_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         action_box.set_homogeneous(True)
 
         # Save button
-        save_btn = self._gtk.Button("complete", "Save", "color1")
-        save_btn.set_size_request(-1, 40)
+        save_btn = Gtk.Button(label="✔ Save")
+        save_btn.get_style_context().add_class("color1")
+        save_btn.set_size_request(-1, 55)
         save_btn.connect("clicked", self.save_slot_config, instance_id, local_slot, global_tool)
         action_box.pack_start(save_btn, True, True, 0)
 
         # Cancel button
-        cancel_btn = self._gtk.Button("cancel", "Cancel", "color4")
-        cancel_btn.set_size_request(-1, 40)
+        cancel_btn = Gtk.Button(label="✖ Cancel")
+        cancel_btn.get_style_context().add_class("color4")
+        cancel_btn.set_size_request(-1, 55)
         cancel_btn.connect("clicked", self.cancel_slot_config)
         action_box.pack_start(cancel_btn, True, True, 0)
 
-        left_box.pack_end(action_box, False, False, 0)
+        left_box.pack_start(action_box, True, True, 0)
 
         # Right column - Selection panels (compact)
-        self.right_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        self.right_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
         self.right_box.set_hexpand(True)
         self.right_box.set_vexpand(True)
 
@@ -2511,10 +3131,7 @@ class Panel(ScreenPanel):
         main_grid.attach(left_box, 0, 0, 1, 1)
         main_grid.attach(self.right_box, 1, 0, 1, 1)
 
-        scrolled = Gtk.ScrolledWindow()
-        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scrolled.add(main_grid)
-        self.content.add(scrolled)
+        self.content.add(main_grid)
         self.content.show_all()
 
     def show_material_selection(self, widget):
@@ -2528,18 +3145,13 @@ class Panel(ScreenPanel):
         title.get_style_context().add_class("description")
         self.right_box.pack_start(title, False, False, 0)
 
-        # Scrollable material list with Empty option
         materials = self.material_options()
-        if not getattr(self, "config_slot_allows_empty", True):
-            materials = [m for m in materials if m != "Empty"]
 
         scrolled = Gtk.ScrolledWindow()
-        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.ALWAYS)
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scrolled.set_overlay_scrolling(False)
-        scrolled.set_min_content_height(240)
         scrolled.set_vexpand(True)
         scrolled.set_hexpand(True)
-        scrolled.set_size_request(-1, 300)
 
         material_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
         material_list.set_margin_top(5)
@@ -2565,24 +3177,21 @@ class Panel(ScreenPanel):
         """Handle material selection"""
         # Check if material actually changed (not same selection again)
         previous_material = self.config_material
+        previous_temp = self.config_temp
         self.config_material = material
         self.material_btn.set_label(f"Material: {material}")
 
-        # Auto-populate temperature whenever material actually changes
-        if previous_material != material:
-            if material in self.FILAMENT_TEMP_DEFAULTS:
+        # Auto-populate the temperature whenever the material changes, or
+        # whenever the slot currently has no usable temp (0) - this avoids
+        # leaving a real material saved with an unusable Temp: 0°C if the
+        # user re-taps the already-selected material button.
+        if material in self.FILAMENT_TEMP_DEFAULTS:
+            if previous_material != material or previous_temp <= 0:
                 new_temp = self.FILAMENT_TEMP_DEFAULTS[material]
                 self.config_temp = new_temp
                 self.temp_btn.set_label(f"Temperature: {new_temp}°C")
-            elif material == "Empty":
-                self.config_temp = 0
-                self.temp_btn.set_label("Temperature: Not Set")
                 logging.info(
-                    f"ACE: Auto-set temperature to {new_temp}°C "
-                    f"for {material}"
-                )
-                self._screen.show_popup_message(
-                    f"Temperature set to {new_temp}°C for {material}", 1
+                    f"ACE: Auto-set temperature to {new_temp}°C for {material}"
                 )
 
         self.clear_right_column()
@@ -2594,7 +3203,7 @@ class Panel(ScreenPanel):
             self.right_box.remove(child)
 
         # Compact current color preview and RGB display
-        preview_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        preview_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         preview_box.set_halign(Gtk.Align.CENTER)
 
         self.right_color_preview = Gtk.EventBox()
@@ -2607,22 +3216,19 @@ class Panel(ScreenPanel):
         self.rgb_display.get_style_context().add_class("description")
         preview_box.pack_start(self.rgb_display, False, False, 0)
 
-        self.right_box.pack_start(preview_box, False, False, 5)
-
         # RGB sliders
         slider_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
 
         self.color_sliders = {}
         for i, color_name in enumerate(['Red', 'Green', 'Blue']):
-            color_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+            color_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
             label = Gtk.Label(label=f"{color_name[0]}:")
-            label.set_size_request(15, -1)
+            label.set_size_request(20, -1)
             color_row.pack_start(label, False, False, 0)
 
             slider = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 255, 1)
             slider.set_value(self.config_color[i])
-            slider.set_size_request(120, 25)
             slider.set_draw_value(True)
             slider.set_value_pos(Gtk.PositionType.RIGHT)
             slider.connect("value-changed", self.on_color_slider_changed, i)
@@ -2630,8 +3236,6 @@ class Panel(ScreenPanel):
             color_row.pack_start(slider, True, True, 0)
 
             slider_box.pack_start(color_row, False, False, 0)
-
-        self.right_box.pack_start(slider_box, False, False, 5)
 
         # Color presets - common filament colors
         preset_colors = [
@@ -2654,26 +3258,41 @@ class Panel(ScreenPanel):
         preset_grid.set_column_spacing(3)
         preset_grid.set_halign(Gtk.Align.CENTER)
 
+        # Colour squares, four to a row, named in their tooltip: three
+        # labelled buttons to a row made the picker 462 px wide on a 480x320
+        # screen and cut its third column off.
         for i, (name, rgb) in enumerate(preset_colors):
-            preset_btn = Gtk.Button(label=name)
-            preset_btn.set_size_request(55, 25)
+            preset_btn = Gtk.Button()
+            preset_btn.set_tooltip_text(name)
+            preset_btn.set_size_request(40, 28)
 
             color = Gdk.RGBA(rgb[0]/255.0, rgb[1]/255.0, rgb[2]/255.0, 1.0)
             preset_btn.override_background_color(Gtk.StateFlags.NORMAL, color)
 
-            brightness = (rgb[0] * 0.299 + rgb[1] * 0.587 + rgb[2] * 0.114)
-            text_color = Gdk.RGBA(0, 0, 0, 1) if brightness > 128 else Gdk.RGBA(1, 1, 1, 1)
-            preset_btn.override_color(Gtk.StateFlags.NORMAL, text_color)
-
             preset_btn.connect("clicked", self.select_color_preset, rgb[:])
-            preset_grid.attach(preset_btn, i % 3, i // 3, 1, 1)
+            preset_grid.attach(preset_btn, i % 4, i // 4, 1, 1)
 
-        self.right_box.pack_start(preset_grid, False, False, 5)
+        # Build a scrollable area for preview + sliders + presets so the
+        # Apply button is always visible at the bottom on smaller screens.
+        scroll_content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        scroll_content.pack_start(preview_box, False, False, 5)
+        scroll_content.pack_start(slider_box, False, False, 5)
+        scroll_content.pack_start(preset_grid, False, False, 5)
 
-        # Apply button
-        apply_btn = self._gtk.Button("complete", "Apply Color", "color1")
-        apply_btn.set_size_request(-1, 30)
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_overlay_scrolling(False)
+        scrolled.set_vexpand(True)
+        scrolled.add(scroll_content)
+
+        # Apply button anchored at the bottom, outside the scroll
+        apply_btn = Gtk.Button(label="✔ Apply Color")
+        apply_btn.get_style_context().add_class("color1")
+        apply_btn.get_style_context().add_class("ace_compact_btn")
+        apply_btn.set_size_request(-1, 36)
         apply_btn.connect("clicked", self.apply_color_selection)
+
+        self.right_box.pack_start(scrolled, True, True, 0)
         self.right_box.pack_end(apply_btn, False, False, 0)
 
         self.right_box.show_all()
@@ -2708,6 +3327,8 @@ class Panel(ScreenPanel):
 
         entry = Gtk.Entry()
         entry.set_max_length(5)
+        # Three digits: GTK's default entry width made the row too wide.
+        entry.set_width_chars(4)
         entry.set_alignment(0.5)
         if getattr(self, "config_temp", None) is not None:
             entry.set_text(str(self.config_temp))
@@ -2750,12 +3371,11 @@ class Panel(ScreenPanel):
         numpad = Gtk.Grid(row_homogeneous=False, column_homogeneous=False)
         keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'B', '0', '.']
 
-        # Scale sizes based on screen height to adapt to different resolutions
-        screen = Gdk.Screen.get_default()
-        screen_h = screen.get_height() if screen else 480
-        # Target ~12% of screen height per key, with sane bounds
-        base_size = int(max(40, min(screen_h * 0.12, 70)))
-        label_size = int(max(12000, min(base_size * 350, 25000)))
+        # Keys sized from the height KlipperScreen gives the panel, not the
+        # monitor's: on a 480x320 screen a 52 px minimum pushed Cancel/Apply
+        # off the bottom. 13% of it matches the old 12% of a 480 px screen.
+        base_size = int(max(36, min(self._gtk.content_height * 0.13, 82)))
+        label_size = int(max(16000, min(base_size * 400, 30000)))
         grid_spacing = max(int(base_size * 0.05), 1)
         for i, label in enumerate(keys):
             if label == 'B':
@@ -2774,14 +3394,17 @@ class Panel(ScreenPanel):
                 child.set_markup(f"<span size='{label_size}'>{GLib.markup_escape_text(label_text)}</span>")
             numpad.attach(btn, i % 3, i // 3, 1, 1)
 
-        btn_row = Gtk.Box(spacing=5)
+        # Cancel and Apply beside the entry: a row of their own below the
+        # keypad fell off the bottom of a 320 px screen.
+        entry_row = Gtk.Box(spacing=6)
         cancel_btn = self._gtk.Button('cancel', scale=.66)
         cancel_btn.connect("clicked", self.clear_right_column)
         apply_btn = self._gtk.Button('complete', style="color1")
         apply_btn.connect("clicked", apply_temperature)
 
-        btn_row.pack_start(cancel_btn, False, False, 0)
-        btn_row.pack_end(apply_btn, False, False, 0)
+        entry_row.pack_start(cancel_btn, False, False, 0)
+        entry_row.pack_start(entry, True, True, 0)
+        entry_row.pack_end(apply_btn, False, False, 0)
 
         # Keep a compact vertical stack
         entry.set_size_request(-1, int(base_size * 0.65))
@@ -2790,9 +3413,8 @@ class Panel(ScreenPanel):
         numpad.set_halign(Gtk.Align.CENTER)
         numpad.set_valign(Gtk.Align.START)
 
-        self.right_box.pack_start(entry, False, False, 4)
+        self.right_box.pack_start(entry_row, False, False, 4)
         self.right_box.pack_start(numpad, False, False, 4)
-        self.right_box.pack_start(btn_row, False, False, 6)
         self.right_box.show_all()
 
     def handle_temperature_input(self, temp):
@@ -2804,7 +3426,7 @@ class Panel(ScreenPanel):
 
             if 0 <= temp_value <= 300:
                 self.config_temp = temp_value
-                self.temp_btn.set_label(f"Temperature: {temp_value}°C")
+                self.temp_btn.set_label(f"Temp: {temp_value}°C")
                 logging.info(f"ACE: ✓ Set self.config_temp={self.config_temp}")
                 self.clear_right_column()
             else:
@@ -2848,9 +3470,9 @@ class Panel(ScreenPanel):
             logging.error("ACE: Save blocked - no material selected")
             return
 
-        if temp < 0 or temp > 300:
+        if temp <= 0 or temp > 300:
             self._screen.show_popup_message(
-                f"ERROR: Temperature must be between 0-300°C!\nCurrent: {temp}°C"
+                f"ERROR: Temperature must be set (1-300°C) for {material}!\nCurrent: {temp}°C"
             )
             logging.error(f"ACE: Save blocked - invalid temp={temp}")
             return

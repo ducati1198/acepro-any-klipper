@@ -22,6 +22,7 @@ Automatically handles filament loading, tool changes, purging, wiping, and even 
 - [Integration with Your Macros](#-integration-with-your-macros)
 - [Slicer Setup (OrcaSlicer)](#-slicer-setup-orcaslicer)
 - [Usage & Commands](#-usage--commands)
+- [Spool Mapping at Print Start](#-spool-mapping-at-print-start)
 - [Endless Spool](#-endless-spool)
 - [Connection Supervision](#-connection-supervision)
 - [KlipperScreen Panel (Optional)](#-klipperscreen-panel-optional)
@@ -243,6 +244,27 @@ For a full list, see [example_cmds.txt](example_cmds.txt) (provided in the repos
 
 ---
 
+## 🎯 Spool Mapping at Print Start
+
+Send a print to any loaded spool without re-slicing. The slicer's `T0`, `T1`… are mapped to physical ACE slots for one print only.
+
+| Command | Description |
+|---------|-------------|
+| `ACE_SET_TOOL_MAP MAP=0:3,2:0 FILE="name.gcode"` | Sliced T0 prints from slot T3, T2 from T0, for that file only |
+| `ACE_SET_TOOL_MAP ... KEEP_EXISTING=1` | Do nothing if a choice was already made for this file |
+| `ACE_GET_TOOL_MAP` / `ACE_CLEAR_TOOL_MAP` | Show / clear the map |
+
+Rules: only `T<n>` is remapped (never `ACE_CHANGE_TOOL`, so RESUME reloads the real spool); the map only applies while that file prints and is cleared when the print ends; endless spool re-points it when it switches slot. The active map is in the `ace` status (`tool_map`, `tool_map_file`, `tool_map_active`).
+
+Two ways to choose the spools:
+
+- **Fluidd** – [`fluidd/`](fluidd/): an ACE Pro dashboard card plus a "Choose ACE spools" window when you press Print or Re-print.
+- **OrcaSlicer 2.5** – [`orca_plugin/`](orca_plugin/): a panel beside the 3D view; the choice is written into the G-code when you send it. A choice made later in Fluidd wins.
+
+The slot's slicer preset name can be stored with `ACE_SET_SLOT ... FILAMENT_SETTINGS_ID="<preset>"`; it is shown in the slot status and written to Moonraker `lane_data`.
+
+---
+
 ## ♻️ Endless Spool
 
 When a filament runout is detected, Endless Spool automatically searches for a compatible spool and switches to it, allowing continuous printing.
@@ -349,6 +371,8 @@ This project builds upon the excellent work of:
 - [agrloki/ValgACE](https://github.com/agrloki/ValgACE)
 
 This fork focuses on making the driver work with **any** Klipper printer, with an easy installer and simplified configuration.
+
+The driver files in `extras/ace/`, the KlipperScreen panel and the Moonraker `ace_status` plugin are synced with [Kobra-S1/ACEPRO](https://github.com/Kobra-S1/ACEPRO) as of 29 Oct 2026 (commit `04d454f`). Added here: the spool mapping commands (`tool_map.py`), the slicer preset name in `ACE_SET_SLOT` and `lane_data`, and tests in `tests/test_tool_map.py`.
 
 **License:** GNU General Public License v3.0
 

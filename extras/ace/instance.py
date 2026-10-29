@@ -7,24 +7,38 @@ import time
 import json
 import copy
 from .config import (
+    FeedAbortedByFirmware,
+    park_pull_length,
     INSTANCE_MANAGERS,
     SLOTS_PER_ACE,
     AceSlotStateMachineState,
     SENSOR_RDM,
     SENSOR_TOOLHEAD,
+    FEEDER_ACE,
+    FEEDER_EXTRUDER,
     FILAMENT_STATE_SPLITTER,
     FILAMENT_STATE_TOOLHEAD,
     FILAMENT_STATE_NOZZLE,
+    SLOT_PARK_STATE_UNKNOWN,
+    SLOT_PARK_STATE_PARKED,
+    SLOT_PARK_STATE_LOADED,
+    SLOT_PARK_STATES,
     RFID_STATE_NO_INFO,
     RFID_STATE_IDENTIFIED,
     MAX_RETRIES,
     get_tool_offset,
+    get_ace_instance_and_slot_for_tool,
     create_inventory,
     create_status_dict,
     normalize_ace_slot_state,
 )
 from .protocol import create_protocol_adapter, normalize_protocol_name, resolve_protocol_name
 from .serial_manager import AceSerialManager
+from .intake_gated import STRATEGY_SENSOR_PUSH
+
+# After a stop_feed_assist the ACE's reported status is trusted only this
+# much later.
+FEED_ASSIST_STOP_SETTLE_S = 1.0
 
 
 class AceInstance:
@@ -34,6 +48,21 @@ class AceInstance:
     DEFAULT_MATERIAL = "Unknown"
     DEFAULT_COLOR = [0, 0, 0]
     DEFAULT_TEMP = 0
+
+    # Feed assist restore retries: a freshly powered ACE spends time in RFID
+    # identification (busy) - retry once per heartbeat (~1 Hz) up to this cap
+    FEED_ASSIST_RESTORE_MAX_ATTEMPTS = 30
+
+    # Consecutive FORBIDDEN rejections tolerated per incremental feed step
+    # before aborting (FORBIDDEN = previous feed still executing; a long
+    # streak means the device is genuinely refusing to feed)
+    INCREMENTAL_FEED_FORBIDDEN_MAX = 5
+
+    # Grace period (s) before a slot gear_err aborts a feed wait: _info
+    # refreshes at 1 Hz, so right after starting a feed it may still hold a
+    # stale error from a previous attempt (the feed command clears it on the
+    # device). Firmware needs ~16-18s to declare an error, so 2s loses nothing.
+    FEED_ERROR_GRACE_S = 2.0
 
     # Material temperature defaults (from RFID tags)
     MATERIAL_TEMPS = {
@@ -64,6 +93,7 @@ class AceInstance:
         active_protocol_name=None,
         serial_mgr=None,
         bus_session=None,
+        target_usb_location=None,
     ):
         """
         Initialize ACE instance.
@@ -73,6 +103,10 @@ class AceInstance:
             ace_config: Configuration dict
             printer: Klipper printer object
             ace_enabled: Initial ACE Pro enabled state
+            target_usb_location: Physical USB location this instance is
+                bound to, as resolved from daisy-chain topology order by
+                AceManager. Ignored when `serial_mgr` is already provided
+                (shared-bus instances build their AceSerialManager elsewhere).
         """
         self.variables = {}
         self.SLOT_COUNT = SLOTS_PER_ACE
@@ -88,9 +122,17 @@ class AceInstance:
         self.feed_speed = float(ace_config["feed_speed"])
         self.retract_speed = float(ace_config["retract_speed"])
         self.total_max_feeding_length = float(ace_config["total_max_feeding_length"])
-        self.parkposition_to_toolhead_length = float(ace_config["parkposition_to_toolhead_length"])
+        self._park_lengths = {
+            "parkposition_to_toolhead_length":
+                ace_config["parkposition_to_toolhead_length"],
+            "toolhead_clear_length": ace_config.get("toolhead_clear_length", 20.),
+        }
+        # Until the manager knows better (a layout asked of the printer).
+        self.apply_toolhead_paths(
+            str(ace_config.get("toolhead_paths", "shared")).lower())
         self.toolchange_load_length = float(ace_config["toolchange_load_length"])
         self.parkposition_to_rdm_length = float(ace_config["parkposition_to_rdm_length"])
+        self.rdm_overshoot_length = float(ace_config["rdm_overshoot_length"])
         self.incremental_feeding_length = float(ace_config["incremental_feeding_length"])
         self.incremental_feeding_speed = float(ace_config["incremental_feeding_speed"])
         self.extruder_feeding_length = float(ace_config["extruder_feeding_length"])
@@ -98,22 +140,49 @@ class AceInstance:
         self.toolhead_slow_loading_speed = float(ace_config["toolhead_slow_loading_speed"])
         self.heartbeat_interval = float(ace_config["heartbeat_interval"])
         self.max_dryer_temperature = float(ace_config["max_dryer_temperature"])
+        # Fast disconnect pause threshold (s); negative = auto (protocol
+        # default: ACE1 30, ACE2 5), 0 disables. Resolved by the manager.
+        self.disconnect_pause_timeout = float(
+            ace_config.get("disconnect_pause_timeout", -1.0)
+        )
 
         self.rfid_inventory_sync_enabled = ace_config.get("rfid_inventory_sync_enabled", True)
         self.feed_assist_active_after_ace_connect = ace_config.get(
             "feed_assist_active_after_ace_connect", True
         )
+        self.stop_ace_on_shutdown = ace_config.get("stop_ace_on_shutdown", True)
+        self.stop_dryer_on_shutdown = ace_config.get("stop_dryer_on_shutdown", False)
 
         # Not overridable per instance
         self.toolhead_full_purge_length = float(ace_config["toolhead_full_purge_length"])
+        self.toolhead_load_retries = int(ace_config.get("toolhead_load_retries", 0))
+        self.toolhead_strategy = ace_config.get("toolhead_strategy", STRATEGY_SENSOR_PUSH)
+        self.filament_intake_sensor_name = ace_config.get("filament_intake_sensor_name")
+        self.intake_feed_speed = (
+            float(ace_config.get("intake_feed_speed") or 0.) or self.feed_speed
+        )
+        self.intake_clear_length = float(ace_config.get("intake_clear_length", 15.))
+        # Set by the manager once the printer's sensors exist, when
+        # toolhead_strategy is intake_gated.
+        self.transfer = None
 
         self.toolhead = None
         self._info = create_status_dict(self.SLOT_COUNT)
+        # The initialized _info reports every slot 'empty'; True once a real
+        # device status has been applied (see _status_update_callback)
+        self._device_status_seen = False
         self.inventory = create_inventory(self.SLOT_COUNT)
+        # Where each slot's filament was last left by the driver (see config.SLOT_PARK_STATES)
+        self.slot_park_state = [SLOT_PARK_STATE_UNKNOWN] * self.SLOT_COUNT
         self._feed_assist_index = -1
         self._feed_assist_topology_position = None  # Track chain position (0, 1, 2...)
+        self._feed_assist_stop_sent_at = 0.0  # reactor time of the last stop request
         self._pending_feed_assist_restore = -1  # Slot to restore after first heartbeat
+        self._feed_assist_restore_attempts = 0  # Retry counter for busy-deferred restores
+        self._assist_lost_streak = 0  # Consecutive heartbeats contradicting assist state (ACE2)
         self._pending_rfid_refresh = False  # Flag to refresh all RFID data after reconnect
+        self._pending_rfid_refresh_slots = []  # Reconnect RFID refresh queue (throttled)
+        self._last_retract_early_stopped = False  # Slot sensor confirmed empty during _retract() (or slot was already empty)
         self._dryer_active = False
         self._dryer_temperature = 0
         self._dryer_duration = 0
@@ -143,13 +212,76 @@ class AceInstance:
             status_debug_logging=self.status_debug_logging,
             supervision_enabled=self.supervision_enabled,
             protocol=self.protocol,
+            target_usb_location=target_usb_location,
         )
-        self.tool_offset = get_tool_offset(self.instance_num)
         if not self.transport_spec.shared_bus:
             self.serial_mgr.set_heartbeat_callback(self._on_heartbeat_response)
         self.serial_mgr.set_on_connect_callback(self._on_ace_connect)
         self._dryer_start_logged = False  # prevent duplicate dryer start messages
         self._shared_bus_heartbeat_timer = None
+        # Set by ace2_ota.Ace2FirmwareUpdater for the length of an IAP run:
+        # a status poll interleaved with the image transfer is a request the
+        # bootloader cannot answer, and its timeouts feed the disconnect logic.
+        self.firmware_update_active = False
+
+    @property
+    def tool_offset(self):
+        """Global tool number of this unit's slot 0. Looked up on use: the
+        tool base is set at klippy:connect, after the instance exists."""
+        return get_tool_offset(self.instance_num)
+
+    def set_firmware_update_active(self, active):
+        """Suspend (True) or resume (False) this box's shared-bus status polls."""
+        self.firmware_update_active = bool(active)
+
+    def rebind_transport(
+        self,
+        protocol,
+        protocol_name,
+        baud,
+        serial_mgr=None,
+        bus_session=None,
+        target_usb_location=None,
+    ):
+        """Swap this instance's protocol/transport in place.
+
+        Used by ``AceManager`` re-detection (``ACE_REDETECT``) to recover an
+        instance that was mis-typed by an empty/incomplete startup USB scan -
+        e.g. an instance frozen on ``ace1_json`` because its ACE2 RS-485 adapter
+        enumerated late, leaving it unable to ever find its port.
+
+        Only the protocol adapter, serial transport, bound bus session and baud
+        change; instance identity is preserved so inventory, tool mapping,
+        sensors and monitors that already reference this object stay valid.
+
+        Callers must gate the *decision* to re-type on positive evidence
+        (ACE2 ``DISCOVER_DEVICE`` confirming an unbound unit) - this method only
+        performs the swap.
+        """
+        was_enabled = True
+        if self.serial_mgr is not None:
+            is_enabled = getattr(self.serial_mgr, "is_ace_pro_enabled", None)
+            if callable(is_enabled):
+                was_enabled = bool(is_enabled())
+
+        self.protocol = protocol
+        self.protocol_name = protocol_name
+        self.transport_spec = protocol.get_transport_spec()
+        self.baud = baud
+        self.bus_session = bus_session
+        self.serial_mgr = serial_mgr or AceSerialManager(
+            self.gcode,
+            self.reactor,
+            self.instance_num,
+            ace_enabled=was_enabled,
+            status_debug_logging=self.status_debug_logging,
+            supervision_enabled=self.supervision_enabled,
+            protocol=self.protocol,
+            target_usb_location=target_usb_location,
+        )
+        if not self.transport_spec.shared_bus:
+            self.serial_mgr.set_heartbeat_callback(self._on_heartbeat_response)
+        self.serial_mgr.set_on_connect_callback(self._on_ace_connect)
 
     def _prepare_request(self, request):
         """Normalize request and attach ACE2 shared-bus target when known."""
@@ -225,6 +357,8 @@ class AceInstance:
     def _send_shared_bus_heartbeat_request(self):
         """Send one targeted ACE2 status poll over shared transport."""
         if not self.transport_spec.shared_bus or not self.serial_mgr.is_connected():
+            return
+        if self.firmware_update_active:
             return
 
         request = self.protocol.build_get_status_request()
@@ -309,6 +443,12 @@ class AceInstance:
             temp_max = extruder_temp.get("max", 0)
             temp_mode = self.ace_config.get("rfid_temp_mode", "average")
 
+            # Some RFID reads come back "identified" but with no actual
+            # temperature/material payload (e.g. a blank/unreadable tag).
+            # Only compute a usable temp when we have real data to derive it
+            # from - otherwise leave any existing (e.g. manually-set) temp
+            # alone instead of clobbering it with a bogus 0/default value.
+            have_temp_data = True
             if temp_min > 0 or temp_max > 0:
                 if temp_mode == "min" and temp_min > 0:
                     rfid_temp = temp_min
@@ -320,8 +460,11 @@ class AceInstance:
                     rfid_temp = temp_max
                 else:
                     rfid_temp = temp_min
+            elif material and material in self.MATERIAL_TEMPS:
+                rfid_temp = self.MATERIAL_TEMPS[material]
             else:
-                rfid_temp = self.MATERIAL_TEMPS.get(material, self.DEFAULT_TEMP)
+                rfid_temp = self.DEFAULT_TEMP
+                have_temp_data = False
 
             if 0 <= slot_idx < self.SLOT_COUNT:
                 inv = self.inventory[slot_idx]
@@ -330,8 +473,12 @@ class AceInstance:
                     inv["material"] = material
 
                 old_temp = inv.get("temp", 0)
-                if rfid_temp != old_temp:
+                if have_temp_data and rfid_temp != old_temp:
                     inv["temp"] = rfid_temp
+                elif not have_temp_data:
+                    # Preserve existing temp (e.g. manually set via dashboard)
+                    # instead of zeroing it out with no usable RFID data.
+                    rfid_temp = old_temp
 
                 if rfid_color:
                     inv["color"] = rfid_color
@@ -421,6 +568,21 @@ class AceInstance:
         else:
             self._enable_feed_assist(slot_index)
 
+    def set_slot_park_state(self, slot, state):
+        """Record where a slot's filament was last left by the driver.
+
+        Every feed/retract request marks the slot "unknown"; only a completed,
+        sensor-verified operation marks it "parked" or "loaded" afterwards.
+        """
+        if state not in SLOT_PARK_STATES:
+            raise ValueError(f"Invalid slot park state: {state}")
+        if 0 <= slot < self.SLOT_COUNT and self.slot_park_state[slot] != state:
+            logging.info(
+                f"ACE[{self.instance_num}]: slot {slot} park_state "
+                f"{self.slot_park_state[slot]} -> {state}"
+            )
+            self.slot_park_state[slot] = state
+
     def _get_current_feed_assist_index(self):
         """Get the current feed assist slot index (-1 if disabled)."""
         return self._feed_assist_index
@@ -432,6 +594,27 @@ class AceInstance:
                 slot_status = normalize_ace_slot_state(slot.get("status"))
                 return slot_status == AceSlotStateMachineState.EMPTY.value
         return False
+
+    def _get_slot_feed_error(self, slot_index):
+        """Return the firmware-reported slot error detail, or None.
+
+        ACE2 reports a per-slot error state ("gear_err") when a commanded
+        feed cannot make progress, with the fault in status_detail
+        (feed_error/rollback_error/assist_error/preload_error/stuck_error/
+        tangled_error/motor_error).  The state list has gear_err for ACE1
+        too, but no ACE1 has been seen reporting it; there a blocked feed
+        runs into the sensor timeout instead.
+        On ACE2 the firmware aborts a blocked feed by itself after ~18 s —
+        polling this during sensor waits turns a minutes-long blind timeout
+        into a fast, precise failure.
+        """
+        for slot in self._info.get("slots", []):
+            if slot.get("index") == slot_index:
+                status = normalize_ace_slot_state(slot.get("status"))
+                if status == AceSlotStateMachineState.GEAR_ERR.value:
+                    return slot.get("status_detail") or status
+                return None
+        return None
 
     def _is_printing_or_paused(self):
         """Check if printer is in a printing or paused state.
@@ -481,18 +664,26 @@ class AceInstance:
             self.wait_ready()
 
     def _disable_feed_assist(self, slot_index):
-        """Disable feed assist."""
+        """Disable feed assist and wait until the ACE has stopped."""
+        if self._send_feed_assist_stop(slot_index):
+            self._await_feed_assist_stopped()
+
+    def _send_feed_assist_stop(self, slot_index):
+        """Ask the ACE to stop assisting slot_index; returns whether there
+        was anything to stop. The filament must not be moved before
+        _await_feed_assist_stopped() has returned - a caller with other
+        work to do first sends, does it, then waits."""
         if slot_index < 0:
             # Feed assist is never active on a negative slot index; nothing to disable.
             # This guards against callers that pass _feed_assist_index directly when
             # feed assist was already off (-1), which would otherwise bypass the check
             # below and send a spurious STOP_FEED_OR_ROLLBACK command.
-            return
+            return False
         if self._feed_assist_index != slot_index:
             logging.warning(
                 f"ACE[{self.instance_num}]: Feed assist not active on slot {slot_index}"
             )
-            return
+            return False
 
         self._feed_assist_index = -1
         self._feed_assist_topology_position = None
@@ -520,11 +711,131 @@ class AceInstance:
             self.wait_ready()
         request = self.protocol.build_stop_feed_assist_request(slot_index)
         self.send_request(request, callback)
-        self.dwell(1.0)
-        self.wait_ready()
+        self._feed_assist_stop_sent_at = self.reactor.monotonic()
+        return True
+
+    def _await_feed_assist_stopped(self):
+        """Wait out a _send_feed_assist_stop(): FEED_ASSIST_STOP_SETTLE_S
+        since the send, then (ACE1) until the ACE reports ready."""
+        settle_left = (self._feed_assist_stop_sent_at + FEED_ASSIST_STOP_SETTLE_S
+                       - self.reactor.monotonic())
+        if settle_left > 0:
+            self.dwell(settle_left)
+        # ACE2: the device only leaves 'busy' once it has processed STOP_FEED_ASSIST,
+        # and the cached status is refreshed via the 1 Hz heartbeat.  If a heartbeat
+        # times out around print-end, wait_ready() can stall for up to 60s before
+        # giving up
+        if not self.protocol.feed_assist_causes_busy():
+            self.wait_ready()
+
+    def stop_activity_on_shutdown(self):
+        """Best-effort stop of ACE-side activity after a Klipper shutdown.
+
+        Called from the klippy:shutdown handler (M112 / emergency stop, fatal
+        MCU error). A shutdown halts every Klipper MCU, but the ACE is not one
+        of them: an active feed assist keeps pushing filament into a toolhead
+        that no longer extrudes, and a feed/retract already sent keeps running
+        to its full length.
+
+        Runs in shutdown state, so it only queues high-priority requests (the
+        serial writer timer keeps running): no wait_ready(), no dwell(), no
+        G-code. Never raises.
+
+        Returns:
+            list: Short descriptions of what was asked to stop.
+        """
+        if not self.stop_ace_on_shutdown:
+            return []
+        try:
+            if not self.serial_mgr.is_connected():
+                return []
+        except Exception:
+            return []
+
+        actions = []
+
+        fa_slot = self._feed_assist_index
+        if fa_slot >= 0:
+            actions.append((
+                f"feed assist on slot {fa_slot}",
+                lambda: self.protocol.build_stop_feed_assist_request(fa_slot),
+            ))
+            self._feed_assist_index = -1
+            self._feed_assist_topology_position = None
+            # The print is over after a shutdown: do not restore feed assist on
+            # the reconnect that follows FIRMWARE_RESTART. The next tool
+            # selection re-enables it as usual.
+            self.state.set(f"ace_feed_assist_index_{self.instance_num}", -1)
+
+        for slot in self._info.get("slots", []):
+            idx = slot.get("index")
+            if not isinstance(idx, int) or idx == fa_slot:
+                continue
+            status = normalize_ace_slot_state(slot.get("status"))
+            if status == AceSlotStateMachineState.FEEDING.value:
+                actions.append((
+                    f"feed on slot {idx}",
+                    lambda i=idx: self.protocol.build_stop_feed_filament_request(i),
+                ))
+            elif status == AceSlotStateMachineState.UNWINDING.value:
+                actions.append((
+                    f"retract on slot {idx}",
+                    lambda i=idx: self.protocol.build_stop_unwind_filament_request(i),
+                ))
+
+        if self.stop_dryer_on_shutdown:
+            dryer = self._info.get("dryer_status") or self._info.get("dryer") or {}
+            if self._dryer_active or dryer.get("status") == "drying":
+                self._dryer_active = False
+                actions.append(("dryer", self.protocol.build_stop_drying_request))
+
+        stopped = []
+        for what, build_request in actions:
+            def callback(response, what=what):
+                if response and response.get("code") == 0:
+                    logging.info(
+                        f"ACE[{self.instance_num}]: Shutdown - {what} stopped"
+                    )
+                else:
+                    msg = response.get("msg", "Unknown") if response else "no response"
+                    logging.warning(
+                        f"ACE[{self.instance_num}]: Shutdown - stopping {what} failed: {msg}"
+                    )
+            try:
+                self.send_high_prio_request(build_request(), callback)
+                stopped.append(what)
+            except Exception:
+                logging.exception(
+                    f"ACE[{self.instance_num}]: Shutdown - could not queue stop of {what}"
+                )
+
+        return stopped
+
+    def _ensure_feed_assist_off_for_motion(self, slot, action):
+        """Disable any active feed assist before a FEED/RETRACT command.
+
+        ACE2 stays 'busy' the whole time feed assist is active and silently
+        ignores feed/retract commands for ANY slot on the same device
+        (recovery cycling does nothing while assist is active on another
+        slot, and wait_ready() stalls too).
+        Callers historically disabled assist only for the slot they were
+        about to move, which no-ops in _disable_feed_assist when the assist
+        is on a different slot. This guard runs in every motion primitive
+        so no call path can send motion into a device blocked by assist.
+        """
+        active = self._feed_assist_index
+        if active < 0:
+            return
+        self.gcode.respond_info(
+            f"ACE[{self.instance_num}]: Feed assist active on slot {active} - "
+            f"disabling before {action} on slot {slot}"
+        )
+        self._disable_feed_assist(active)
 
     def _feed(self, slot, length, speed, callback=None):
         """Feed filament from slot."""
+        self._ensure_feed_assist_off_for_motion(slot, "feed")
+        self.set_slot_park_state(slot, SLOT_PARK_STATE_UNKNOWN)
         self.gcode.respond_info(
             f"ACE[{self.instance_num}]: _feed() -> slot={slot}, "
             f"length={length}mm, speed={speed}mm/s"
@@ -603,7 +914,7 @@ class AceInstance:
 
         return monitor
 
-    def _retract(self, slot, length, speed, on_retract_started=None, on_wait_for_ready=None):
+    def _retract(self, slot, length, speed, on_retract_started=None, on_wait_for_ready=None, early_stop_callback=None):
         """
         Retract filament from slot with automatic retry on FORBIDDEN errors.
 
@@ -618,13 +929,29 @@ class AceInstance:
         Raises:
             ValueError: If retraction fails after all retries
         """
+        if length <= 0:
+            # The ACE takes a negative length as "keep pulling".
+            self._last_retract_early_stopped = True
+            self.gcode.respond_info(
+                f"ACE[{self.instance_num}]: Retract skipped - nothing to pull "
+                f"on slot {slot} (length {length}mm)"
+            )
+            return {"code": 0, "msg": "Retract skipped: no length"}
+
         max_retries = MAX_RETRIES
         retry_delay_s = 2.0
 
+        # Must run BEFORE wait_ready(): with assist active, ACE2 is 'busy'
+        # by design and wait_ready() would stall without this.
+        self._ensure_feed_assist_off_for_motion(slot, "retract")
+        self.set_slot_park_state(slot, SLOT_PARK_STATE_UNKNOWN)
+
         self.wait_ready()
+        self._last_retract_early_stopped = False
 
         # If the slot already reports empty, there is nothing to retract.
         if self._is_slot_empty(slot):
+            self._last_retract_early_stopped = True
             self.gcode.respond_info(
                 f"ACE[{self.instance_num}]: Retract skipped - slot {slot} is empty"
             )
@@ -633,7 +960,9 @@ class AceInstance:
         for attempt in range(1, max_retries + 1):
             ace_status_before = self._info.get('status', 'unknown')
             retract_start_time = time.time()
-            early_stop_state = {"triggered": False, "elapsed": None}
+            # One stop per retract: "triggered" is the slot-empty stop,
+            # "reason" the early_stop_callback's.
+            early_stop_state = {"triggered": False, "elapsed": None, "reason": None}
 
             if attempt > 1:
                 self.gcode.respond_info(
@@ -649,10 +978,11 @@ class AceInstance:
             response_container = {"response": None, "done": False}
 
             def check_slot_empty():
-                if early_stop_state["triggered"]:
+                if early_stop_state["triggered"] or early_stop_state["reason"]:
                     return
                 if self._is_slot_empty(slot):
                     early_stop_state["triggered"] = True
+                    self._last_retract_early_stopped = True
                     early_stop_state["elapsed"] = time.time() - retract_start_time
                     self.gcode.respond_info(
                         f"ACE[{self.instance_num}]: Retract stopped after "
@@ -721,17 +1051,33 @@ class AceInstance:
                     if early_stop_state["triggered"]:
                         self.wait_ready()
                         return {"code": 0, "msg": "Retract stopped early: slot empty"}
+                    if early_stop_callback is not None:
+                        stop_reason = early_stop_callback()
+                        if stop_reason:
+                            self._stop_retract(slot)
+                            self.wait_ready()
+                            return {"code": 0, "msg": f"Retract stopped early: {stop_reason}"}
                     self.reactor.pause(self.reactor.monotonic() + 0.2)
 
                 def wait_cycle():
                     if on_wait_for_ready is not None:
                         on_wait_for_ready()
                     check_slot_empty()
+                    if (early_stop_callback is None or early_stop_state["triggered"]
+                            or early_stop_state["reason"]):
+                        return
+                    stop_reason = early_stop_callback()
+                    if stop_reason:
+                        early_stop_state["reason"] = stop_reason
+                        self._stop_retract(slot)
 
                 self.wait_ready(on_wait_cycle=wait_cycle)
 
                 if early_stop_state["triggered"]:
                     return {"code": 0, "msg": "Retract stopped early: slot empty"}
+                if early_stop_state["reason"]:
+                    return {"code": 0,
+                            "msg": f"Retract stopped early: {early_stop_state['reason']}"}
 
                 return response
 
@@ -821,6 +1167,18 @@ class AceInstance:
 
         while not self.manager.get_switch_state(SENSOR_TOOLHEAD):
             now = time.time()
+            # Fail fast on the firmware's own verdict: the device aborts a
+            # blocked feed itself (slot -> gear_err) long before our sensor
+            # timeout - don't wait blind, and don't grind with the extruder.
+            if now - start_time > self.FEED_ERROR_GRACE_S:
+                slot_error = self._get_slot_feed_error(local_slot)
+                if slot_error is not None:
+                    self._stop_feed(local_slot)
+                    raise FeedAbortedByFirmware(
+                        f"ACE[{self.instance_num}]: Firmware aborted the feed on "
+                        f"slot {local_slot}: {slot_error}. Filament cannot "
+                        f"advance - check spool, slot outlet and filament path."
+                    )
             if now - start_time > timeout_s:
                 self.gcode.respond_info(
                     f"ACE[{self.instance_num}]: Feed timeout for {feed_length}mm after {timeout_s} seconds"
@@ -830,6 +1188,16 @@ class AceInstance:
 
         # Final sanity check
         if not self.manager.get_switch_state(SENSOR_TOOLHEAD):
+            # Last chance to honor the firmware verdict before the extruder
+            # assist phase: grinding the extruder against a blocked path for
+            # 60s can chew the filament and leave fragments in the toolhead.
+            slot_error = self._get_slot_feed_error(local_slot)
+            if slot_error is not None:
+                raise FeedAbortedByFirmware(
+                    f"ACE[{self.instance_num}]: Firmware aborted the feed on "
+                    f"slot {local_slot}: {slot_error}. Skipping extruder "
+                    f"assist - filament cannot advance."
+                )
             self.gcode.respond_info(
                 f"ACE[{self.instance_num}]: Toolhead sensor not triggered after feed. "
                 f"Running extruder assist for up-to 60s..."
@@ -869,6 +1237,11 @@ class AceInstance:
                 f"{extruder_feeding_speed}mm/s after multiple attempts"
             )
 
+        # The ACE pushed alone up to here; from the sensor on the extruder
+        # pulls, so its path has to be on this tool now. After the slowdown:
+        # a selector takes a moment, and the ACE keeps pushing meanwhile.
+        self.manager.route_to_tool(self.tool_offset + local_slot)
+
         self._extruder_move(extruder_feeding_length, extruder_feeding_speed, wait_for_move_end=True)
         self._stop_feed(local_slot)
         self.wait_ready()
@@ -900,6 +1273,19 @@ class AceInstance:
                     f"ACE[{self.instance_num}]: Feed failed: {response.get('msg')}"
                 )
 
+    def apply_toolhead_paths(self, toolhead_paths):
+        """Set the pull from the toolhead back to where an unloaded
+        filament rests. The attribute is named after the shared layout's
+        config key; with a tube per tool it is toolhead_clear_length."""
+        self.parkposition_to_toolhead_length = park_pull_length(
+            self._park_lengths, toolhead_paths)
+
+    def load_feeder(self):
+        """Who brings a filament to the toolhead sensor on a load, for
+        AceManager.route_to_tool: the extruder pulls it there with the
+        intake-gated strategy, the ACE pushes it there otherwise."""
+        return FEEDER_EXTRUDER if self.transfer is not None else FEEDER_ACE
+
     def _feed_filament_into_toolhead(self, tool, check_pre_condition=True):
         """Feed filament from slot to toolhead sensor, then extruder to nozzle."""
         self.wait_ready()
@@ -917,24 +1303,58 @@ class AceInstance:
             if self.manager.get_switch_state(SENSOR_TOOLHEAD):
                 raise ValueError("Cannot feed, filament in nozzle")
 
-        try:
-            self._feed_to_toolhead_with_extruder_assist(
-                local_slot,
-                self.toolchange_load_length,
-                self.feed_speed,
-                self.extruder_feeding_length,
-                self.extruder_feeding_speed
-            )
-        except Exception as e:
-            # Perform your custom action here, e.g., log, cleanup, etc.
-            self.gcode.respond_info(
-                f"ACE[{self.instance_num}]: Exception during feed to toolhead: {e}, "
-                f"retracting filament 150mm back in case it got squished and stuck "
-                f"in the filament-hub"
-            )
-            self._retract(local_slot, 150, self.retract_speed)
-
-            raise  # Re-raise the original exception
+        attempts = 1 + self.toolhead_load_retries
+        # A failed attempt's pull-back below ends the park.
+        parked = self.transfer is not None and self.manager.is_parked(tool)
+        push_through = (self.manager.runout_reload_length_for(tool)
+                        if self.transfer is not None else 0.)
+        for attempt in range(1, attempts + 1):
+            try:
+                if self.transfer is not None:
+                    self.transfer.load(local_slot, parked=parked and attempt == 1,
+                                       push_through=push_through)
+                else:
+                    self._feed_to_toolhead_with_extruder_assist(
+                        local_slot,
+                        self.toolchange_load_length,
+                        self.feed_speed,
+                        self.extruder_feeding_length,
+                        self.extruder_feeding_speed
+                    )
+                break
+            except FeedAbortedByFirmware as e:
+                # Still in the gears, nothing pushed: pulling back would only
+                # lose the grip (a stall within the first 150 mm did).
+                self.gcode.respond_info(
+                    f"ACE[{self.instance_num}]: Exception during feed to toolhead: {e}, "
+                    f"the ACE stopped the feed itself - filament stays in its gears"
+                )
+                if attempt == attempts:
+                    raise
+                self.gcode.respond_info(
+                    f"ACE[{self.instance_num}]: Retrying the load of T{tool} "
+                    f"(attempt {attempt + 1} of {attempts})"
+                )
+                self.manager.route_to_tool(tool, self.load_feeder())
+            except Exception as e:
+                self.gcode.respond_info(
+                    f"ACE[{self.instance_num}]: Exception during feed to toolhead: {e}, "
+                    f"retracting filament 150mm back in case it got squished and stuck "
+                    f"in the filament-hub"
+                )
+                if self.transfer is not None:
+                    # The gear may hold the filament: free it for the ACE.
+                    self.manager.route_to_tool(tool, FEEDER_ACE)
+                self._retract(local_slot, 150, self.retract_speed)
+                if attempt == attempts:
+                    raise
+                self.gcode.respond_info(
+                    f"ACE[{self.instance_num}]: Retrying the load of T{tool} "
+                    f"(attempt {attempt + 1} of {attempts})"
+                )
+                # The failed attempt may have left the printer's path set up
+                # differently.
+                self.manager.route_to_tool(tool, self.load_feeder())
 
         self.state.set(
             "ace_filament_pos",
@@ -961,6 +1381,7 @@ class AceInstance:
         self.state.set(
             "ace_filament_pos", FILAMENT_STATE_NOZZLE
         )
+        self.set_slot_park_state(local_slot, SLOT_PARK_STATE_LOADED)
 
         return self.toolhead_full_purge_length
 
@@ -1067,6 +1488,8 @@ class AceInstance:
         Returns:
             dict: Response from ACE
         """
+        self._ensure_feed_assist_off_for_motion(slot, "feed (sync)")
+        self.set_slot_park_state(slot, SLOT_PARK_STATE_UNKNOWN)
         self.gcode.respond_info(
             f"ACE[{self.instance_num}]: feed_filament_with_wait_for_response() -> slot={slot}, "
             f"length={length}mm, speed={speed}mm/s"
@@ -1132,48 +1555,177 @@ class AceInstance:
         return None
 
     def rmd_triggered_unload_slot(self, manager, slot, length, overshoot_length):
-        """Unload slot with RDM sensor monitoring and overshoot compensation."""
-        if manager.has_rdm_sensor():
-            f_index = self._get_current_feed_assist_index()
-            self._disable_feed_assist(slot)
+        """Unload slot with RDM sensor monitoring during retraction.
 
-            timeout_seconds = (length / self.retract_speed) * self.timeout_multiplier
-            start_time = time.time()
-            sensor_clear_time = None
-            # Start retraction
-            self._retract(slot, length, self.retract_speed)
+        One retract of length + overshoot_length, monitored through
+        _retract(early_stop_callback=...): it is stopped overshoot_length
+        after the RDM clears, timed at the retract speed (the ACE reports no
+        position). One command, because a stop and a second retract make
+        the ACE disengage and engage its gears again. When the move ends
+        before the overshoot has run, the whole overshoot follows as a
+        retract of its own. The clear time reported counts from the ACE's
+        acceptance of the retract, so it measures the pull alone: before
+        it, _retract waits for the ACE's ready, which an ACE2 only reports
+        once its feed assist stop has gone through.
 
-            poll_interval = 0.02
+        Args:
+            manager: AceManager instance (for sensor access)
+            slot: Local slot index (0-3)
+            length: Maximum retract distance before the clear (mm)
+            overshoot_length: Extra mm to retract after sensor clears
+        Returns:
+            True if sensor cleared and retract stopped, False on timeout
+        """
+        if not manager.has_rdm_sensor():
+            return False
 
-            while (time.time() - start_time) < timeout_seconds:
-                if manager.is_filament_path_free():
-                    if sensor_clear_time is None:
-                        sensor_clear_time = time.time() - start_time
-                        overshoot_time = (overshoot_length / self.retract_speed) * self.timeout_multiplier
+        f_index = self._get_current_feed_assist_index()
+        self._disable_feed_assist(slot)
 
-                        self.gcode.respond_info(
-                            f"ACE[{self.instance_num}]: Sensor cleared "
-                            f"after {sensor_clear_time:.2f}s, "
-                            f"waiting {overshoot_time:.2f}s for overshoot"
-                        )
+        # Shared state for the callback
+        rdm_state = {
+            "cleared": False,
+            "clear_time": None,
+            "overshoot_done": False,
+            "start_time": time.time(),
+            "last_log": 0,
+        }
 
-                        self.dwell(overshoot_time)
+        def rdm_early_stop_check():
+            """Called every ~200ms from _retract()'s dwell loop.
+            Returns a truthy string to trigger early stop, or None to continue."""
+            elapsed = time.time() - rdm_state["start_time"]
 
-                    self._stop_retract(slot)
+            rdm_has_filament = manager.get_instant_switch_state(SENSOR_RDM)
 
-                    elapsed = time.time() - start_time
-                    self.gcode.respond_info(
-                        f"ACE[{self.instance_num}]: RMD triggered unload slot {slot} "
-                        f"completed in {elapsed:.2f}s"
-                    )
-                    self._update_feed_assist(f_index)
-                    return True
+            # Log sensor state every 2 seconds
+            if elapsed - rdm_state["last_log"] >= 2.0:
+                state_str = "TRIGGERED" if rdm_has_filament else "CLEAR"
+                self.gcode.respond_info(
+                    f"ACE[{self.instance_num}]: [{elapsed:.1f}s] RDM={state_str}"
+                )
+                rdm_state["last_log"] = elapsed
 
-                self.dwell(poll_interval)
+            if not rdm_has_filament and not rdm_state["cleared"]:
+                rdm_state["cleared"] = True
+                rdm_state["clear_time"] = elapsed
 
+                self.gcode.respond_info(
+                    f"ACE[{self.instance_num}]: RDM CLEAR after {elapsed:.1f}s — "
+                    f"applying {overshoot_length}mm overshoot"
+                )
+
+            if rdm_state["cleared"] and not rdm_state["overshoot_done"]:
+                past_clear_s = elapsed - rdm_state["clear_time"]
+                if past_clear_s >= overshoot_length / self.retract_speed:
+                    rdm_state["overshoot_done"] = True
+                    return (f"RDM clear at {rdm_state['clear_time']:.1f}s "
+                            f"plus {overshoot_length}mm overshoot")
+
+            return None
+
+        self.gcode.respond_info(
+            f"ACE[{self.instance_num}]: RDM-triggered unload — "
+            f"slot {slot}, max {length}mm @ {self.retract_speed}mm/s, "
+            f"overshoot {overshoot_length}mm"
+        )
+
+        def pull_started():
+            rdm_state["start_time"] = time.time()
+
+        try:
+            result = self._retract(
+                slot, length + overshoot_length, self.retract_speed,
+                on_retract_started=pull_started,
+                early_stop_callback=rdm_early_stop_check,
+            )
+            # The RDM may clear too late for the move to hold the overshoot
+            # (Kobra X: the path back to the RDM is about as long as
+            # `length`). How far it got past the clear is a guess from the
+            # time, and a short tip blocks the next slot in the merge, so
+            # the whole overshoot follows.
+            if rdm_state["cleared"] and not rdm_state["overshoot_done"]:
+                self._retract(slot, overshoot_length, self.retract_speed)
+        except Exception as e:
             self._stop_retract(slot)
-            self._update_feed_assist(f_index)
-        return False
+            self.gcode.respond_info(
+                f"ACE[{self.instance_num}]: Retract error: {e}"
+            )
+            self._restore_assist_after_unload(manager, f_index)
+            # If the sensor already cleared, the physical unload succeeded
+            # even if wait_ready timed out afterward. The end position is
+            # unconfirmed though, so park_state stays unknown.
+            return rdm_state["cleared"]
+
+        self._restore_assist_after_unload(manager, f_index)
+
+        # Slot was already empty before retraction started
+        if result and "slot empty" in result.get("msg", ""):
+            return True
+
+        if rdm_state["cleared"]:
+            total = time.time() - rdm_state["start_time"]
+            self.gcode.respond_info(
+                f"ACE[{self.instance_num}]: RMD triggered unload slot {slot} "
+                f"completed in {total:.1f}s "
+                f"(sensor cleared at {rdm_state['clear_time']:.1f}s)"
+            )
+            self.set_slot_park_state(slot, SLOT_PARK_STATE_PARKED)
+            return True
+        else:
+            self.gcode.respond_info(
+                f"ACE[{self.instance_num}]: RDM triggered unload — "
+                f"sensor never cleared during {length}mm retract!"
+            )
+            return False
+
+    def _restore_assist_after_unload(self, manager, f_index):
+        """Restore the feed assist captured before an RDM-monitored retract.
+
+        Standalone unloads (runout recovery, operator unload of a parked
+        slot) must give back the assist they took — on ACE1 the single gear
+        assembly serves all four slots, so the retract necessarily stole it
+        from the printing slot.  During a toolchange the orchestration owns
+        assist state: the new tool's load enables its own assist, and
+        re-arming the OLD tool's here runs a second assist in parallel
+        with the still-loaded previous tool's, which can drive two units
+        pushing filament into one toolhead.  Strict `is True` so mock
+        managers in tests (whose attributes are truthy Mocks) keep the
+        standalone behavior.
+        """
+        if getattr(manager, "toolchange_in_progress", False) is True:
+            if f_index is not None and f_index >= 0:
+                self.gcode.respond_info(
+                    f"ACE[{self.instance_num}]: Not restoring feed assist on "
+                    f"slot {f_index} after unload - toolchange in progress "
+                    f"owns assist state"
+                )
+            return
+        self._update_feed_assist(f_index)
+
+    def _manager_toolchange_in_progress(self):
+        """True only while a real toolchange is running (strict-bool).
+
+        The registry-backed ``manager`` property may be absent or a test
+        mock; anything but a literal ``True`` counts as "no toolchange".
+        """
+        try:
+            mgr = self.manager
+        except Exception:
+            return False
+        return getattr(mgr, "toolchange_in_progress", False) is True
+
+    def _manager_owns_assist_state(self):
+        """True while the manager decides which tool's assist may run: a
+        toolchange is running, or startup validation may still reset the
+        persisted current tool (strict-bool, like the helper above)."""
+        if self._manager_toolchange_in_progress():
+            return True
+        try:
+            mgr = self.manager
+        except Exception:
+            return False
+        return getattr(mgr, "startup_validation_in_progress", False) is True
 
     def _smart_unload_slot(self, slot, length=100, on_retract_started=None):
         """
@@ -1275,6 +1827,8 @@ class AceInstance:
                     self.gcode.respond_info(
                         f"ACE[{self.instance_num}]: ✓ Path clear (both sensors)"
                     )
+                    if not self._last_retract_early_stopped:
+                        self.set_slot_park_state(slot, SLOT_PARK_STATE_PARKED)
                     return True
                 else:
                     if not self.rmd_triggered_unload_slot(self.manager, slot, length, self.parkposition_to_rdm_length):
@@ -1308,6 +1862,8 @@ class AceInstance:
                     self.gcode.respond_info(
                         f"ACE[{self.instance_num}]: ✓ Toolhead sensor clear"
                     )
+                    if not self._last_retract_early_stopped:
+                        self.set_slot_park_state(slot, SLOT_PARK_STATE_PARKED)
                     return True
                 else:
                     self.gcode.respond_info(
@@ -1433,17 +1989,29 @@ class AceInstance:
 
         if response and "result" in response:
             self._info = response["result"]
+            # _info now reflects real device state (the initialized default
+            # reports every slot 'empty') — gates skipping actions on
+            # device-reported emptiness may trust it from here on.
+            self._device_status_seen = True
 
             # Handle pending RFID refresh after reconnect
             if self._pending_rfid_refresh:
                 self._pending_rfid_refresh = False
                 if self.rfid_inventory_sync_enabled:
-                    # Unconditionally query all slots to catch any spool changes during disconnect
-                    for slot_idx in range(self.SLOT_COUNT):
-                        logging.info(
-                            f"ACE[{self.instance_num}]: Reconnect - querying RFID data for slot {slot_idx}"
-                        )
-                        self._query_rfid_full_data(slot_idx)
+                    # Query slots sequentially to avoid post-reconnect request bursts
+                    # that can push responses beyond timeout and look unsolicited.
+                    self._pending_rfid_refresh_slots = list(range(self.SLOT_COUNT))
+
+            if (
+                self.rfid_inventory_sync_enabled
+                and self._pending_rfid_refresh_slots
+                and not self._pending_rfid_queries
+            ):
+                slot_idx = self._pending_rfid_refresh_slots.pop(0)
+                logging.info(
+                    f"ACE[{self.instance_num}]: Reconnect - querying RFID data for slot {slot_idx}"
+                )
+                self._query_rfid_full_data(slot_idx)
 
             slots = self._info.get("slots", [])
             for slot in slots:
@@ -1470,6 +2038,33 @@ class AceInstance:
                     # Detect state changes
                     if old_status != new_status:
                         inventory_changed = True
+                        # A spool was inserted or ran out: whatever position we
+                        # knew for this slot no longer applies. Motion states
+                        # (shifting/feeding/unwinding) are not spool changes:
+                        # every commanded move walks the slot through them,
+                        # and an ACE 2 reports shifting for as long as feed
+                        # assist is on. Those moves are covered by the hooks
+                        # in _feed()/_retract().
+                        if (
+                            old_status == AceSlotStateMachineState.EMPTY.value
+                            or new_status == AceSlotStateMachineState.EMPTY.value
+                        ):
+                            self.set_slot_park_state(idx, SLOT_PARK_STATE_UNKNOWN)
+
+                        # ANY slot reaching ready means a (pre)load cycle just
+                        # finished - the ACE hardware disables feed assist
+                        # while gearing another slot. The 1 Hz heartbeat
+                        # usually samples the intermediate preload/identifying
+                        # states, so the empty→ready case below almost never
+                        # matches directly (inserting a spool into T0 mid-print
+                        # silently kills feed assist on the printing T1).
+                        # Trigger the restore on any transition into ready
+                        # instead - of another slot: enabling assist makes
+                        # the assisted slot itself report 'shifting' for a
+                        # second, and its return to ready is that enable.
+                        if (new_status == AceSlotStateMachineState.READY.value
+                                and idx != feed_assist_was_active):
+                            filament_loaded = True
 
                         # Log the state transition
                         if (
@@ -1506,7 +2101,6 @@ class AceInstance:
                                     f"ACE[{self.instance_num}]: Slot {idx} auto-restored: "
                                     f"empty → ready (material={saved_material})"
                                 )
-                            filament_loaded = True
 
                         elif (
                             old_status == AceSlotStateMachineState.READY.value
@@ -1540,6 +2134,21 @@ class AceInstance:
                             updated_color = [0, 0, 0]
                             updated_temp = 0
                             inventory_changed = True  # Force persistence update
+
+                        # Authoritative check: if this slot is recorded as the
+                        # active/loaded tool (ace_current_index) but the ACE
+                        # hardware itself reports it empty, the persisted
+                        # state is stale - clear it. Catches cases the
+                        # sensor-only startup validation can miss entirely
+                        # (e.g. wrong physical unit bound to this instance).
+                        if self.manager:
+                            self.manager.reconcile_stale_current_index(
+                                self.tool_offset + idx,
+                                reason=(
+                                    f"ACE[{self.instance_num}] slot {idx} "
+                                    f"status update"
+                                ),
+                            )
 
                     # Handle RFID tag detection - only query get_filament_info, don't use status metadata
                     elif new_status == AceSlotStateMachineState.READY.value:
@@ -1647,18 +2256,45 @@ class AceInstance:
             # self._emit_inventory_update()
 
             # Restore feed assist if it was active before filament loading
-            # (ACE hardware disables feed assist when loading filament on any slot)
+            # (ACE hardware disables feed assist when loading filament on any
+            # slot). Queue it via the retrying pending-restore path instead of
+            # enabling directly: the slot reports ready BEFORE the preload
+            # cycle really finishes, and ACE1 units can watchdog-reset their
+            # USB during preload (Errno 5 write errors) - the queue waits for
+            # a genuinely ready device and survives a reconnect in between.
             if filament_loaded and feed_assist_was_active >= 0:
-                self.gcode.respond_info(
-                    f"ACE[{self.instance_num}]: Re-enabling feed assist on slot "
-                    f"{feed_assist_was_active} after automatic disable during slot loading"
-                )
+                # ACE2 is excluded here on purpose: its work status is 'busy'
+                # the whole time assist is active, so if assist survived the
+                # slot load, a queued restore would retry wait_ready (5s
+                # timeout each) against a busy-by-design device for the full
+                # attempt budget. _reconcile_feed_assist_state() is the
+                # authoritative ACE2 detector - it queues only when the
+                # device provably dropped assist (status 'ready').  ACE1
+                # stays 'ready' during assist and needs this event path.
                 try:
-                    self._enable_feed_assist(feed_assist_was_active)
-                except Exception as e:
-                    self.gcode.respond_info(
-                        f"ACE[{self.instance_num}]: Failed to restore feed assist: {e}"
-                    )
+                    ace2_like = self.protocol.feed_assist_causes_busy()
+                except Exception:
+                    ace2_like = False
+                if not ace2_like and self._pending_feed_assist_restore < 0:
+                    if self._manager_toolchange_in_progress():
+                        # The toolchange owns assist state (it enables the
+                        # new tool's assist after load) - a slot-ready
+                        # restore here re-arms the OLD tool's assist in
+                        # parallel.  Also silences the restore churn from a
+                        # spool end flapping at the slot sensor mid-swap.
+                        logging.info(
+                            f"ACE[{self.instance_num}]: Slot-ready assist "
+                            f"restore for slot {feed_assist_was_active} "
+                            f"skipped - toolchange in progress"
+                        )
+                    else:
+                        self.gcode.respond_info(
+                            f"ACE[{self.instance_num}]: Queueing feed assist restore on "
+                            f"slot {feed_assist_was_active} after automatic disable "
+                            f"during slot loading"
+                        )
+                        self._pending_feed_assist_restore = feed_assist_was_active
+                        self._feed_assist_restore_attempts = 0
 
     def _on_heartbeat_response(self, response):
         """Handle heartbeat response."""
@@ -1669,6 +2305,9 @@ class AceInstance:
         if response.get("code") == 0 and "result" in response:
             self._reset_status_failure_tracking()
             self._status_update_callback(response)
+
+            # Detect device-side feed assist loss (ACE2) and queue a restore
+            self._reconcile_feed_assist_state()
 
             # Restore pending feed assist after first successful heartbeat
             self._maybe_restore_pending_feed_assist()
@@ -1714,6 +2353,7 @@ class AceInstance:
         if callable(disconnect):
             try:
                 disconnect()
+                return
             except Exception as exc:
                 logging.warning(
                     "ACE[%s]: disconnect() after status failures failed: %s",
@@ -1721,18 +2361,147 @@ class AceInstance:
                     exc,
                 )
 
+        # No recovery path ran: let the next failed poll try again.
+        self._status_recovery_in_progress = False
+
+    def _reconcile_feed_assist_state(self):
+        """Detect device-side feed assist loss and queue a restore (ACE2).
+
+        On ACE2 the device stays 'busy' the whole time feed assist is active
+        - a 'ready' work status while the driver believes assist is on means
+        the firmware dropped it (e.g. while preloading a freshly inserted
+        spool on another slot). Two consecutive
+        contradicting heartbeats guard against a stale sample right after
+        enabling. ACE1 has no equivalent signal (work status stays 'ready'
+        during assist) and relies on the slot-ready restore path in
+        _status_update_callback instead.
+        """
+        if self._feed_assist_index < 0:
+            self._assist_lost_streak = 0
+            return
+        if self._pending_feed_assist_restore >= 0:
+            return  # restore already queued
+        try:
+            if not self.protocol.feed_assist_causes_busy():
+                return  # ACE1: no device-side signal to reconcile against
+        except Exception:
+            return
+
+        # A device-side assist drop on an EMPTY slot is not a loss to repair
+        # - the spool ran out (endless-spool tail case).  Restoring assist
+        # onto an empty slot just pokes the firmware's starved retry cycling
+        # (~4 s pump ramps, forever, with the work status toggling
+        # busy/ready - which is exactly what feeds this reconcile check).
+        # The slot-ready restore path in _status_update_callback re-arms
+        # assist when the slot is refilled.
+        if (getattr(self, "_device_status_seen", False)
+                and self._is_slot_empty(self._feed_assist_index)):
+            self._assist_lost_streak = 0
+            return
+
+        if self._info.get("status") != "ready":
+            self._assist_lost_streak = 0
+            return
+
+        self._assist_lost_streak += 1
+        if self._assist_lost_streak < 2:
+            return
+
+        self._assist_lost_streak = 0
+        slot = self._feed_assist_index
+        self.gcode.respond_info(
+            f"ACE[{self.instance_num}]: Feed assist on slot {slot} was dropped "
+            f"by the device (work status 'ready' while assist expected) - restoring"
+        )
+        self._pending_feed_assist_restore = slot
+        self._feed_assist_restore_attempts = 0
+
     def _maybe_restore_pending_feed_assist(self):
         """
         Restore feed assist if pending after reconnect.
 
-        Called after first successful heartbeat to ensure connection is stable.
+        Called after each successful heartbeat. A busy device (e.g. RFID
+        identification after power-up) re-queues the restore and it is
+        retried on subsequent heartbeats, up to
+        FEED_ASSIST_RESTORE_MAX_ATTEMPTS.
         Only restores if reconnecting to same position in daisy chain (topology).
         """
         if self._pending_feed_assist_restore < 0:
             return
 
+        # Defer while a toolchange runs - it owns assist state, and a
+        # restore firing mid-toolchange re-arms an assist the toolchange
+        # deliberately disabled.  Likewise during startup validation, which
+        # may still reset the current tool the ownership check reads.  The
+        # pending restore stays queued and re-evaluates on the next
+        # heartbeat; the ownership check below then drops it if the
+        # toolchange or validation made it stale.
+        if self._manager_owns_assist_state():
+            return
+
         slot = self._pending_feed_assist_restore
         self._pending_feed_assist_restore = -1  # Clear before attempting
+
+        # Never restore assist onto a slot the device reports empty - the
+        # spool ran out and the firmware dropping assist there is correct
+        # behavior, not a loss.  The slot-ready restore path re-queues when
+        # the slot is refilled.  Gated on _device_status_seen: the
+        # initialized _info defaults every slot to 'empty' and must not
+        # suppress restores before the first real heartbeat.
+        if (getattr(self, "_device_status_seen", False)
+                and self._is_slot_empty(slot)):
+            logging.info(
+                f"ACE[{self.instance_num}]: Skipping feed assist restore on "
+                f"slot {slot} - device reports it empty (spool ran out)"
+            )
+            return
+
+        # Single-assist invariant (same rule as _on_ace_connect): assist
+        # may only be restored for the slot holding the globally current
+        # tool - anything else is stale state (e.g. left behind by a failed
+        # toolchange) and restoring it runs a second assist in parallel
+        # with the loaded tool's (two ACEs pushing filament into one
+        # toolhead).  Fail-open when the state store is unavailable or
+        # unparsable.
+        current_tool = None
+        try:
+            current_tool = int(self.state.get("ace_current_index", -1))
+        except Exception:
+            current_tool = None
+        if current_tool is not None:
+            expected_ace, expected_slot = None, -1
+            if current_tool >= 0:
+                try:
+                    expected_ace, expected_slot = (
+                        get_ace_instance_and_slot_for_tool(current_tool)
+                    )
+                except Exception:
+                    expected_ace, expected_slot = None, -1
+            if expected_ace is not self or expected_slot != slot:
+                self.gcode.respond_info(
+                    f"ACE[{self.instance_num}]: NOT restoring feed assist on "
+                    f"slot {slot} - it does not belong to the current tool "
+                    f"(T{current_tool}). Clearing stale assist state."
+                )
+                if self._feed_assist_index == slot:
+                    self._feed_assist_index = -1
+                    self._feed_assist_topology_position = None
+                try:
+                    self.state.set(
+                        f"ace_feed_assist_index_{self.instance_num}", -1
+                    )
+                except Exception:
+                    pass
+                return
+
+        self._feed_assist_restore_attempts += 1
+        if self._feed_assist_restore_attempts > self.FEED_ASSIST_RESTORE_MAX_ATTEMPTS:
+            self.gcode.respond_info(
+                f"ACE[{self.instance_num}]: Giving up feed assist restore on slot "
+                f"{slot} after {self.FEED_ASSIST_RESTORE_MAX_ATTEMPTS} attempts - "
+                f"re-enable manually with ACE_ENABLE_FEED_ASSIST"
+            )
+            return
 
         # Check if we're at the same position in the daisy chain
         current_position = self.serial_mgr.get_usb_topology_position()
@@ -1762,10 +2531,15 @@ class AceInstance:
                 lambda response: self._on_feed_assist_restore_response(response, slot)
             )
         except TimeoutError:
-            # ACE busy (likely RFID read/preload) - skip restoration, don't cascade timeouts
+            # ACE busy (likely RFID read/preload) - re-queue so the next
+            # heartbeat actually retries (previously this message promised a
+            # retry that never happened: the pending flag was already cleared)
+            self._pending_feed_assist_restore = slot
             logging.info(
-                f"ACE[{self.instance_num}]: Skipping feed assist restoration on slot {slot} "
-                f"(ACE busy, will retry on next status update)"
+                f"ACE[{self.instance_num}]: Feed assist restoration on slot {slot} "
+                f"deferred (ACE busy) - retry "
+                f"{self._feed_assist_restore_attempts}/{self.FEED_ASSIST_RESTORE_MAX_ATTEMPTS} "
+                f"on next status update"
             )
         except Exception as e:
             self.gcode.respond_info(
@@ -1787,6 +2561,7 @@ class AceInstance:
         # Set flag to refresh RFID data on next status update
         # This ensures we have current data if spools were changed during disconnect
         self._pending_rfid_refresh = True
+        self._pending_rfid_refresh_slots = []
         logging.info(
             f"ACE[{self.instance_num}]: Connected - will refresh RFID data after first status update"
         )
@@ -1797,11 +2572,72 @@ class AceInstance:
             )
             return
 
-        # Check if feed assist was active before disconnect
-        if self._feed_assist_index >= 0:
-            slot = self._feed_assist_index
+        # Check if feed assist was active before disconnect. After a klippy
+        # restart the in-memory index is -1 even though assist was on before -
+        # fall back to the persisted ace_feed_assist_index_<n> variable (which
+        # was previously written but never read back, losing feed assist on
+        # every klippy/FIRMWARE_RESTART mid-print).
+        slot = self._feed_assist_index
+        if slot < 0:
+            try:
+                slot = int(self.state.get(
+                    f"ace_feed_assist_index_{self.instance_num}", -1
+                ))
+            except (TypeError, ValueError):
+                slot = -1
+            if 0 <= slot < self.SLOT_COUNT:
+                logging.info(
+                    f"ACE[{self.instance_num}]: Recovered persisted feed assist "
+                    f"slot {slot} (klippy restart)"
+                )
+            else:
+                slot = -1
+
+        if slot >= 0:
+            # Single-assist invariant: feed assist may only be restored for
+            # the slot holding the globally current tool (ace_current_index).
+            # At most ONE assist may exist across ALL instances - anything
+            # else is stale state (e.g. left behind by a failed toolchange).
+            # Restoring it would run a second assist in parallel with the
+            # loaded tool's, and on ACE2 additionally block every
+            # feed/retract command on that device.
+            #
+            # Fail-open: the invariant is only applied when ace_current_index
+            # is positively readable as an int (-1 included: "no tool loaded"
+            # makes any assist stale). If the state store is unavailable or
+            # the value unparsable, keep the plain restore behavior rather
+            # than destroying possibly-legitimate assist state.
+            current_tool = None
+            try:
+                current_tool = int(self.state.get("ace_current_index", -1))
+            except Exception:
+                current_tool = None
+            if current_tool is not None:
+                expected_ace, expected_slot = None, -1
+                if current_tool >= 0:
+                    try:
+                        expected_ace, expected_slot = (
+                            get_ace_instance_and_slot_for_tool(current_tool)
+                        )
+                    except Exception:
+                        expected_ace, expected_slot = None, -1
+                if expected_ace is not self or expected_slot != slot:
+                    self.gcode.respond_info(
+                        f"ACE[{self.instance_num}]: NOT restoring feed assist "
+                        f"on slot {slot} - it does not belong to the current "
+                        f"tool (T{current_tool}). Clearing stale assist state."
+                    )
+                    self._feed_assist_index = -1
+                    self._feed_assist_topology_position = None
+                    self.state.set(
+                        f"ace_feed_assist_index_{self.instance_num}", -1
+                    )
+                    slot = -1
+
+        if slot >= 0:
             # Defer restoration until after first heartbeat confirms communication
             self._pending_feed_assist_restore = slot
+            self._feed_assist_restore_attempts = 0
             logging.info(
                 f"ACE[{self.instance_num}]: Connected - "
                 f"will restore feed assist on slot {slot} after heartbeat"
@@ -1815,6 +2651,14 @@ class AceInstance:
     def _on_feed_assist_restore_response(self, response, slot):
         """Handle response from feed assist restoration after reconnect."""
         if response and response.get("code") == 0:
+            # Restore bypasses _enable_feed_assist, so sync runtime state here.
+            # Matters for the klippy-restart recovery path where the in-memory
+            # index is still -1 (slot came from the persisted variable).
+            self._feed_assist_index = slot
+            self._feed_assist_topology_position = (
+                self.serial_mgr.get_usb_topology_position()
+            )
+            self._feed_assist_restore_attempts = 0
             self.gcode.respond_info(
                 f"ACE[{self.instance_num}]: Feed assist restored on slot {slot}"
             )
@@ -1823,6 +2667,11 @@ class AceInstance:
             self.gcode.respond_info(
                 f"ACE[{self.instance_num}]: Feed assist restoration failed: {msg}"
             )
+            # Same retry budget as the busy-device path in
+            # _maybe_restore_pending_feed_assist: retry on the next heartbeat.
+            if (self._feed_assist_restore_attempts
+                    < self.FEED_ASSIST_RESTORE_MAX_ATTEMPTS):
+                self._pending_feed_assist_restore = slot
 
     def get_status(self, eventtime=None):
         """Return status dict for Klipper/Moonraker queries."""
@@ -1834,6 +2683,7 @@ class AceInstance:
         status["protocol"] = self.protocol_name
         status["rfid_sync_enabled"] = bool(self.rfid_inventory_sync_enabled)
         status["feed_assist_slot"] = self._get_current_feed_assist_index()
+        status["max_dryer_temperature"] = self.max_dryer_temperature
 
         # Attach device info from last get_info response, if available
         device_info = getattr(self.serial_mgr, "device_info", {})
@@ -1868,6 +2718,16 @@ class AceInstance:
             status.setdefault("usb_path", usb_path)
 
         # Expose UI-friendly slot inventory (material/color/temp/status/RFID metadata)
+        # Keep the device-reported error detail from the raw status slots:
+        # ACE2 reports a per-slot error family (129-135: feed/rollback/assist/
+        # preload/stuck/tangled/motor error) that the inventory only sees
+        # collapsed to "gear_err" — status_detail/status_code preserve which
+        # fault it actually was for diagnostics and error handling.
+        live_slots = {
+            s.get("index"): s
+            for s in (status.get("slots") or [])
+            if isinstance(s, dict)
+        }
         slots_out = []
         for i in range(self.SLOT_COUNT):
             inv = self.inventory[i]
@@ -1879,7 +2739,12 @@ class AceInstance:
                 "material": inv.get("material"),
                 "temp": inv.get("temp"),
                 "rfid": inv.get("rfid", False),
+                "park_state": self.slot_park_state[i],
             }
+            live = live_slots.get(i) or {}
+            for key in ("status_detail", "status_code"):
+                if key in live:
+                    slot_data[key] = live[key]
             for key in [
                 "sku",
                 "brand",
@@ -1890,6 +2755,7 @@ class AceInstance:
                 "diameter",
                 "total",
                 "current",
+                "custom_name",  # acepro-any-klipper: slicer preset name (ACE_SET_SLOT FILAMENT_SETTINGS_ID=)
             ]:
                 if key in inv:
                     slot_data[key] = inv[key]
@@ -1930,6 +2796,9 @@ class AceInstance:
         new_pos[3] += length
 
         toolhead.move(new_pos, speed)
+        # This move bypasses G-code: without the reset the next G1 drives
+        # the extruder back to the E position G-code still remembers.
+        self.printer.lookup_object('gcode_move').reset_last_position()
         if wait_for_move_end:
             toolhead.wait_moves()
 
@@ -1987,7 +2856,18 @@ class AceInstance:
         start_time = time.time()
 
         while not self.manager.get_switch_state(target_sensor):
-            if time.time() - start_time > timeout_s:
+            elapsed = time.time() - start_time
+            # Fail fast on the firmware's own verdict (slot -> gear_err)
+            if elapsed > self.FEED_ERROR_GRACE_S:
+                slot_error = self._get_slot_feed_error(slot)
+                if slot_error is not None:
+                    self._stop_feed(slot)
+                    raise FeedAbortedByFirmware(
+                        f"ACE[{self.instance_num}]: Firmware aborted the feed on "
+                        f"slot {slot}: {slot_error}. Filament cannot advance - "
+                        f"check spool, slot outlet and filament path."
+                    )
+            if elapsed > timeout_s:
                 self.gcode.respond_info(
                     f"ACE[{self.instance_num}]: Feed timeout after {timeout_s:.1f}s "
                     f"(target: {target_sensor_name})"
@@ -2001,17 +2881,59 @@ class AceInstance:
         accumulated_feed_length = feed_length
 
         if not self.manager.get_switch_state(target_sensor):
+            forbidden_streak = 0
 
             while (not self.manager.get_switch_state(target_sensor) and
                    accumulated_feed_length < self.total_max_feeding_length):
+                # Fail fast on the firmware's own verdict before pushing more
+                slot_error = self._get_slot_feed_error(slot)
+                if slot_error is not None:
+                    self._stop_feed(slot)
+                    raise ValueError(
+                        f"ACE[{self.instance_num}]: Firmware aborted the feed on "
+                        f"slot {slot}: {slot_error} (after {accumulated_feed_length}mm). "
+                        f"Filament cannot advance - check spool, slot outlet and "
+                        f"filament path."
+                    )
+
                 self.gcode.respond_info(
                     f"ACE[{self.instance_num}]: Incremental feed to {target_sensor_name} "
                     f"({self.incremental_feeding_length}mm at "
                     f"{self.incremental_feeding_speed}mm/s)"
                 )
 
-                self._feed(slot, self.incremental_feeding_length, self.incremental_feeding_speed)
+                # Send synchronously and check the verdict: the ACE rejects a
+                # feed command while the previous feed is still executing
+                # (FORBIDDEN). The old blind timer pacing (nominal move time
+                # + 0.1s margin) overran regularly, and every rejected feed
+                # was still counted as fed filament - the loop then hit
+                # total_max_feeding_length hundreds of phantom mm before the
+                # filament actually got there.
+                response = self.feed_filament_with_wait_for_response(
+                    slot, self.incremental_feeding_length,
+                    self.incremental_feeding_speed
+                )
+                if response and response.get("msg") == "FORBIDDEN":
+                    forbidden_streak += 1
+                    if forbidden_streak >= self.INCREMENTAL_FEED_FORBIDDEN_MAX:
+                        self._stop_feed(slot)
+                        raise ValueError(
+                            f"ACE[{self.instance_num}]: Feed rejected (FORBIDDEN) "
+                            f"{forbidden_streak} times in a row on slot {slot} - "
+                            f"device refuses to feed, aborting"
+                        )
+                    self.gcode.respond_info(
+                        f"ACE[{self.instance_num}]: Feed deferred (FORBIDDEN - "
+                        f"previous feed still running), retrying "
+                        f"({forbidden_streak}/{self.INCREMENTAL_FEED_FORBIDDEN_MAX})"
+                    )
+                    self.dwell(0.5)
+                    continue
 
+                # Non-FORBIDDEN errors keep the old count-and-continue
+                # semantics: not counting them could loop forever, and the
+                # sensor/max-length checks above remain the safety net.
+                forbidden_streak = 0
                 accumulated_feed_length += self.incremental_feeding_length
 
                 self.dwell((self.incremental_feeding_length / self.incremental_feeding_speed) + 0.1)

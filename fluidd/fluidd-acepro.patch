@@ -1,0 +1,2148 @@
+# Fluidd v1.37.7 ACE Pro card + print-start spool picker
+# Apply on top of fluidd-core/fluidd v1.37.7:  git apply fluidd-acepro.patch
+diff --git a/src/App.vue b/src/App.vue
+index de67b82..7e0cb50 100644
+--- a/src/App.vue
++++ b/src/App.vue
+@@ -76,6 +76,7 @@
+         <screws-tilt-adjust-dialog />
+         <mmu-edit-ttg-map-dialog />
+         <afc-print-start-dialog />
++        <ace-print-start-dialog />
+       </template>
+     </v-main>
+ 
+@@ -107,6 +108,7 @@ import KeyboardShortcutsDialog from '@/components/common/KeyboardShortcutsDialog
+ import { eventTargetIsContentEditable, keyboardEventToKeyboardShortcut } from '@/util/event-helpers'
+ import MmuEditTtgMapDialog from './components/widgets/mmu/MmuEditTtgMapDialog.vue'
+ import AfcPrintStartDialog from './components/widgets/afc/dialogs/AfcPrintStartDialog.vue'
++import AcePrintStartDialog from './components/widgets/acepro/AcePrintStartDialog.vue'
+ 
+ @Component<App>({
+   metaInfo () {
+@@ -123,7 +125,8 @@ import AfcPrintStartDialog from './components/widgets/afc/dialogs/AfcPrintStartD
+     ActionCommandPromptDialog,
+     KeyboardShortcutsDialog,
+     MmuEditTtgMapDialog,
+-    AfcPrintStartDialog
++    AfcPrintStartDialog,
++    AcePrintStartDialog
+   }
+ })
+ export default class App extends Mixins(StateMixin, FilesMixin, BrowserMixin) {
+diff --git a/src/components/widgets/acepro/AcePrintStartDialog.vue b/src/components/widgets/acepro/AcePrintStartDialog.vue
+new file mode 100644
+index 0000000..0dc1ab4
+--- /dev/null
++++ b/src/components/widgets/acepro/AcePrintStartDialog.vue
+@@ -0,0 +1,461 @@
++<template>
++  <app-dialog
++    v-model="open"
++    title="Choose ACE spools"
++    width="620"
++    @save="startPrint(true)"
++  >
++    <div
++      v-if="thumbnailUrl"
++      class="d-flex justify-center ace-thumb"
++    >
++      <v-img
++        :src="thumbnailUrl"
++        max-height="200"
++        contain
++      />
++    </div>
++
++    <v-card-text class="pt-3 pb-1">
++      <div class="text-body-2 text-truncate">
++        {{ shortFilename }}
++      </div>
++      <div class="text-caption secondary--text">
++        Pick which ACE spool prints each filament from the slicer. Best matches are preselected.
++      </div>
++    </v-card-text>
++
++    <v-card-text
++      v-if="!metadataLoaded"
++      class="text-center py-6"
++    >
++      <v-progress-circular
++        indeterminate
++        size="24"
++        class="mr-2"
++      />
++      Reading file details…
++    </v-card-text>
++
++    <template v-else>
++      <v-divider />
++      <div
++        v-for="row in rows"
++        :key="`ace-map:${row.tool}`"
++        class="d-flex align-center px-4 py-2 ace-map-row"
++      >
++        <div class="ace-map-source d-flex align-center">
++          <div
++            class="ace-dot mr-2"
++            :style="{ backgroundColor: row.color || '#888' }"
++          />
++          <div class="text-truncate">
++            <div class="text-body-2 font-weight-bold">
++              T{{ row.tool }} · {{ row.type || 'Filament' }}
++            </div>
++            <div class="text-caption secondary--text text-truncate">
++              {{ row.name || (row.color ? row.color.toUpperCase() : '') }}
++              <template v-if="row.weight">
++                · {{ row.weight }} g
++              </template>
++            </div>
++          </div>
++        </div>
++
++        <v-icon
++          small
++          class="mx-2"
++        >
++          $chevronRight
++        </v-icon>
++
++        <div class="flex-grow-1">
++          <v-select
++            :value="mapping[row.tool]"
++            :items="slotItems"
++            item-value="tool"
++            item-disabled="disabled"
++            dense
++            outlined
++            hide-details
++            @change="setMapping(row.tool, $event)"
++          >
++            <template #selection="{ item }">
++              <div class="d-flex align-center text-truncate">
++                <div
++                  class="ace-dot ace-dot--small mr-2"
++                  :style="{ backgroundColor: item.color }"
++                />
++                <span class="text-truncate">{{ item.text }}</span>
++              </div>
++            </template>
++            <template #item="{ item }">
++              <div class="d-flex align-center">
++                <div
++                  class="ace-dot ace-dot--small mr-2"
++                  :style="{ backgroundColor: item.color }"
++                />
++                <span>{{ item.text }}</span>
++              </div>
++            </template>
++          </v-select>
++          <div
++            v-for="warning in rowWarnings(row)"
++            :key="`warn:${row.tool}:${warning}`"
++            class="text-caption warning--text mt-1"
++          >
++            {{ warning }}
++          </div>
++        </div>
++      </div>
++
++      <v-alert
++        v-if="readySlots.length === 0"
++        dense
++        text
++        type="warning"
++        class="ma-4 mb-2"
++      >
++        No ACE slot has filament marked as ready. Set up your spools on the ACE Pro card first.
++      </v-alert>
++    </template>
++
++    <template #actions>
++      <app-btn
++        text
++        color="warning"
++        @click="open = false"
++      >
++        Cancel
++      </app-btn>
++      <v-spacer />
++      <app-btn
++        text
++        color="primary"
++        :disabled="!metadataLoaded || busy"
++        title="Ignore the picker and use T0, T1… exactly as sliced"
++        @click="startPrint(false)"
++      >
++        Print as sliced
++      </app-btn>
++      <app-btn
++        color="primary"
++        type="submit"
++        :loading="busy"
++        :disabled="!metadataLoaded || readySlots.length === 0"
++      >
++        Print
++      </app-btn>
++    </template>
++  </app-dialog>
++</template>
++
++<script lang="ts">
++import { Component, Mixins, Watch } from 'vue-property-decorator'
++import AceProMixin from './acepro'
++import FilesMixin from '@/mixins/files'
++import { SocketActions } from '@/api/socketActions'
++import getFilePaths from '@/util/get-file-paths'
++import { encodeGcodeParamValue } from '@/util/gcode-helpers'
++import type { AppFile, AppFileWithMeta } from '@/store/files/types'
++import type { AceSlotState } from './types'
++import { acePrintStartState } from './printStartState'
++
++interface SourceRow {
++  tool: number;
++  color: string;
++  type: string;
++  name: string;
++  weight: number;
++}
++
++interface SlotItem {
++  tool: number;
++  text: string;
++  color: string;
++  material: string;
++  disabled: boolean;
++  slot: AceSlotState;
++}
++
++const normalizeMaterial = (value: string | undefined) => (value ?? '')
++  .toUpperCase()
++  .replace(/[\s_]+/g, '')
++  .replace(/^PA(?=$|[-+])/, 'NYLON')
++
++const hexToRgb = (hex: string): [number, number, number] | null => {
++  const match = /^#?([0-9a-f]{6})/i.exec(hex.trim())
++
++  if (!match) return null
++
++  const value = parseInt(match[1], 16)
++
++  return [(value >> 16) & 255, (value >> 8) & 255, value & 255]
++}
++
++// Rough perceptual RGB distance (0 = same, ~765 = opposite)
++const colorDistance = (a: string, b: string): number => {
++  const ca = hexToRgb(a)
++  const cb = hexToRgb(b)
++
++  if (!ca || !cb) return 400
++
++  const rMean = (ca[0] + cb[0]) / 2
++  const dr = ca[0] - cb[0]
++  const dg = ca[1] - cb[1]
++  const db = ca[2] - cb[2]
++
++  return Math.sqrt((2 + rMean / 256) * dr * dr + 4 * dg * dg + (2 + (255 - rMean) / 256) * db * db)
++}
++
++@Component
++export default class AcePrintStartDialog extends Mixins(AceProMixin, FilesMixin) {
++  mapping: Record<number, number> = {}
++  busy = false
++
++  get open (): boolean {
++    return acePrintStartState.show
++  }
++
++  set open (value: boolean) {
++    acePrintStartState.show = value
++  }
++
++  get filename (): string {
++    return acePrintStartState.filename
++  }
++
++  get shortFilename (): string {
++    return this.filename ? getFilePaths(this.filename, 'gcodes').filename : ''
++  }
++
++  get currentFile (): AppFile | AppFileWithMeta | undefined {
++    if (!this.filename) return undefined
++
++    const { filename, rootPath } = getFilePaths(this.filename, 'gcodes')
++
++    return this.$typedGetters['files/getFile'](rootPath, filename)
++  }
++
++  get meta (): Partial<AppFileWithMeta> {
++    return (this.currentFile ?? {}) as Partial<AppFileWithMeta>
++  }
++
++  get metadataLoaded (): boolean {
++    const file = this.currentFile
++
++    return file != null && ('estimated_time' in file || 'filament_colors' in file || 'slicer' in file)
++  }
++
++  get thumbnailUrl (): string {
++    if (!this.currentFile || !this.filename) return ''
++
++    const { path } = getFilePaths(this.filename, 'gcodes')
++
++    return this.getThumbUrl(this.currentFile, 'gcodes', path, true, this.currentFile.modified) ?? ''
++  }
++
++  get usedTools (): number[] {
++    const file = this.meta
++
++    if (Array.isArray(file.referenced_tools) && file.referenced_tools.length > 0) {
++      return [...file.referenced_tools].sort((a, b) => a - b)
++    }
++
++    const weights = Array.isArray(file.filament_weights) ? file.filament_weights : []
++    const byWeight = weights
++      .map((weight, index) => (weight > 0 ? index : -1))
++      .filter(index => index >= 0)
++
++    if (byWeight.length > 0) return byWeight
++
++    const colors = Array.isArray(file.filament_colors) ? file.filament_colors : []
++
++    return colors.length === 1 || colors.length === 0 ? [0] : colors.map((_, index) => index)
++  }
++
++  get rows (): SourceRow[] {
++    const file = this.meta
++    const colors = Array.isArray(file.filament_colors) ? file.filament_colors : []
++    const types = Array.isArray(file.filament_type) ? file.filament_type : []
++    const names = Array.isArray(file.filament_name) ? file.filament_name : []
++    const weights = Array.isArray(file.filament_weights) ? file.filament_weights : []
++    const pick = <T>(list: T[], index: number): T | undefined => list[index] ?? (list.length === 1 ? list[0] : undefined)
++
++    return this.usedTools.map(tool => ({
++      tool,
++      color: String(pick(colors, tool) ?? ''),
++      type: String(pick(types, tool) ?? ''),
++      name: String(pick(names, tool) ?? ''),
++      weight: Math.round(Number(weights[tool] ?? 0))
++    }))
++  }
++
++  get allSlots (): SlotItem[] {
++    return this.aceUnits.flatMap(unit => this.aceUnitSlots(unit).map(slot => {
++      const empty = this.aceSlotIsEmpty(slot)
++      const material = this.aceSlotMaterial(slot)
++      const where = this.aceUnits.length > 1 ? ` (ACE ${unit.index + 1})` : ''
++
++      return {
++        tool: slot.tool ?? 0,
++        text: `T${slot.tool} · ${empty ? 'empty' : material}${slot.temp && !empty ? ` · ${slot.temp}°C` : ''}${where}`,
++        color: this.aceSlotColor(slot),
++        material,
++        disabled: empty,
++        slot
++      }
++    }))
++  }
++
++  get slotItems (): SlotItem[] {
++    return this.allSlots
++  }
++
++  get readySlots (): SlotItem[] {
++    return this.allSlots.filter(slot => !slot.disabled)
++  }
++
++  slotFor (tool: number): SlotItem | undefined {
++    return this.allSlots.find(slot => slot.tool === tool)
++  }
++
++  score (row: SourceRow, slot: SlotItem): number {
++    const materialMatch = !row.type || normalizeMaterial(row.type) === normalizeMaterial(slot.material)
++
++    return (materialMatch ? 0 : 1000) + (row.color ? colorDistance(row.color, slot.color) : 0)
++  }
++
++  autoMatch () {
++    const mapping: Record<number, number> = {}
++    const used = new Set<number>()
++
++    for (const row of this.rows) {
++      const candidates = [...this.readySlots]
++        .sort((a, b) =>
++          (this.score(row, a) + (used.has(a.tool) ? 500 : 0) + (a.tool === row.tool ? -1 : 0)) -
++          (this.score(row, b) + (used.has(b.tool) ? 500 : 0) + (b.tool === row.tool ? -1 : 0))
++        )
++
++      const best = candidates[0]?.tool ?? row.tool
++
++      mapping[row.tool] = best
++      used.add(best)
++    }
++
++    this.mapping = mapping
++  }
++
++  setMapping (tool: number, target: number) {
++    this.mapping = { ...this.mapping, [tool]: target }
++  }
++
++  rowWarnings (row: SourceRow): string[] {
++    const target = this.mapping[row.tool]
++    const slot = target != null ? this.slotFor(target) : undefined
++    const warnings: string[] = []
++
++    if (!slot || slot.disabled) {
++      warnings.push('This slot is empty.')
++      return warnings
++    }
++
++    if (row.type && normalizeMaterial(row.type) !== normalizeMaterial(slot.material)) {
++      warnings.push(`Sliced for ${row.type}, spool is ${slot.material || 'unknown'}.`)
++    }
++
++    if (row.color && colorDistance(row.color, slot.color) > 250) {
++      warnings.push('Color differs from the sliced color.')
++    }
++
++    const shared = this.rows.filter(other => other.tool !== row.tool && this.mapping[other.tool] === target)
++
++    if (shared.length > 0) {
++      warnings.push(`Same spool as ${shared.map(other => `T${other.tool}`).join(', ')}.`)
++    }
++
++    return warnings
++  }
++
++  get mapString (): string {
++    return Object.entries(this.mapping)
++      .filter(([from, to]) => Number(from) !== to)
++      .map(([from, to]) => `${from}:${to}`)
++      .join(',')
++  }
++
++  async startPrint (useMapping: boolean) {
++    if (!this.filename || this.busy) return
++
++    this.busy = true
++
++    try {
++      // Always record the choice for this file (an empty MAP = "as sliced"), so a map that the
++      // OrcaSlicer plugin embedded in the G-code (KEEP_EXISTING=1) does not override it.
++      const gcode = `ACE_SET_TOOL_MAP MAP=${useMapping ? this.mapString : ''} FILE=${encodeGcodeParamValue(this.filename)}`
++
++      this.addConsoleEntry(gcode)
++      await SocketActions.printerGcodeScript(gcode)
++      await SocketActions.printerPrintStart(this.filename)
++
++      if (this.$route.name !== 'home') {
++        this.$router.push({ name: 'home' })
++      }
++
++      this.open = false
++    } finally {
++      this.busy = false
++    }
++  }
++
++  @Watch('open')
++  onOpen (value: boolean) {
++    if (!value) return
++
++    this.mapping = {}
++
++    if (this.filename && !this.metadataLoaded) {
++      SocketActions.serverFilesMetadata(this.filename)
++    }
++
++    if (this.metadataLoaded) {
++      this.autoMatch()
++    }
++  }
++
++  @Watch('metadataLoaded')
++  onMetadataLoaded (value: boolean) {
++    if (value && this.open && Object.keys(this.mapping).length === 0) {
++      this.autoMatch()
++    }
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++.ace-thumb {
++  background-color: rgba(0, 0, 0, 0.5);
++}
++
++.ace-map-row + .ace-map-row {
++  border-top: thin solid rgba(128, 128, 128, 0.2);
++}
++
++.ace-map-source {
++  width: 42%;
++  min-width: 0;
++}
++
++.ace-dot {
++  flex: 0 0 auto;
++  width: 22px;
++  height: 22px;
++  border-radius: 50%;
++  border: 1px solid rgba(128, 128, 128, 0.7);
++}
++
++.ace-dot--small {
++  width: 14px;
++  height: 14px;
++}
++</style>
+diff --git a/src/components/widgets/acepro/AceProCard.vue b/src/components/widgets/acepro/AceProCard.vue
+new file mode 100644
+index 0000000..85bca3c
+--- /dev/null
++++ b/src/components/widgets/acepro/AceProCard.vue
+@@ -0,0 +1,224 @@
++<template>
++  <collapsable-card
++    title="ACE Pro"
++    icon="$mmu"
++    draggable
++    layout-path="dashboard.ace-pro-card"
++  >
++    <template #menu>
++      <app-btn
++        icon
++        small
++        :disabled="!klippyReady || !aceEnabled"
++        title="Refresh slots"
++        @click="refresh"
++      >
++        <v-icon dense>
++          $refresh
++        </v-icon>
++      </app-btn>
++      <ace-pro-settings-menu />
++    </template>
++
++    <v-card-text class="pt-1">
++      <v-alert
++        v-if="!aceEnabled"
++        dense
++        text
++        type="info"
++        class="mb-3"
++      >
++        <div class="d-flex align-center flex-wrap">
++          <span class="mr-2">ACE Pro support is turned off. Tool changes and slot moves are ignored.</span>
++          <v-spacer />
++          <app-btn
++            v-if="aceEnablePinName"
++            small
++            color="primary"
++            :disabled="!klippyReady"
++            @click="setEnabled(true)"
++          >
++            Turn on
++          </app-btn>
++        </div>
++      </v-alert>
++
++      <div class="d-flex flex-wrap align-center ace-status-row">
++        <v-chip
++          small
++          label
++          :color="aceCurrentTool >= 0 ? 'primary' : undefined"
++          class="mr-1 mb-1"
++        >
++          <v-icon
++            x-small
++            left
++          >
++            $printer3dNozzle
++          </v-icon>
++          {{ aceCurrentTool >= 0 ? `T${aceCurrentTool} loaded` : 'No tool loaded' }}
++        </v-chip>
++        <v-chip
++          small
++          label
++          outlined
++          class="mr-1 mb-1"
++        >
++          Filament: {{ positionLabel }}
++        </v-chip>
++        <v-chip
++          v-for="sensor in sensors"
++          :key="`sensor:${sensor.name}`"
++          small
++          label
++          outlined
++          :color="sensor.color"
++          class="mr-1 mb-1"
++        >
++          {{ sensor.name }}: {{ sensor.label }}
++        </v-chip>
++        <v-chip
++          v-if="aceManager && aceManager.endless_spool_enabled"
++          small
++          label
++          outlined
++          color="success"
++          class="mr-1 mb-1"
++        >
++          Endless spool: {{ aceManager.endless_spool_match_mode || 'exact' }}
++        </v-chip>
++        <v-chip
++          v-if="toolMapText"
++          small
++          label
++          outlined
++          :color="aceManager && aceManager.tool_map_active ? 'primary' : undefined"
++          :close="!aceIsPrinting"
++          class="mr-1 mb-1"
++          :title="aceManager && aceManager.tool_map_file ? `For ${aceManager.tool_map_file}` : undefined"
++          @click:close="aceSendGcode('ACE_CLEAR_TOOL_MAP')"
++        >
++          Spools: {{ toolMapText }}
++        </v-chip>
++        <v-spacer />
++        <app-btn
++          v-if="aceCurrentTool >= 0"
++          x-small
++          outlined
++          color="warning"
++          class="mb-1"
++          :disabled="!canMove"
++          @click="unloadCurrent"
++        >
++          Unload T{{ aceCurrentTool }}
++        </app-btn>
++      </div>
++
++      <ace-pro-unit
++        v-for="unit in aceUnits"
++        :key="`ace-unit:${unit.index}`"
++        :unit="unit"
++        :show-title="aceUnits.length > 1"
++        class="mt-3"
++        @slot-click="openSlot(unit.index, $event)"
++      />
++    </v-card-text>
++
++    <ace-pro-slot-dialog
++      v-if="dialog.open"
++      v-model="dialog.open"
++      :unit-index="dialog.unit"
++      :slot-index="dialog.slot"
++    />
++  </collapsable-card>
++</template>
++
++<script lang="ts">
++import { Component, Mixins } from 'vue-property-decorator'
++import AceProMixin from './acepro'
++import AceProUnit from './AceProUnit.vue'
++import AceProSlotDialog from './AceProSlotDialog.vue'
++import AceProSettingsMenu from './AceProSettingsMenu.vue'
++
++const POSITION_LABELS: Record<string, string> = {
++  bowden: 'in bowden (unloaded)',
++  splitter: 'at splitter',
++  toolhead: 'at toolhead',
++  nozzle: 'in nozzle'
++}
++
++@Component({
++  components: {
++    AceProUnit,
++    AceProSlotDialog,
++    AceProSettingsMenu
++  }
++})
++export default class AceProCard extends Mixins(AceProMixin) {
++  dialog = {
++    open: false,
++    unit: 0,
++    slot: 0
++  }
++
++  get positionLabel (): string {
++    return POSITION_LABELS[this.aceFilamentPosition] ?? this.aceFilamentPosition
++  }
++
++  get sensors () {
++    const describe = (name: string, value: boolean | null | undefined) => ({
++      name,
++      label: value == null ? 'n/a' : value ? 'filament' : 'empty',
++      color: value == null ? undefined : value ? 'success' : 'grey'
++    })
++
++    return [
++      describe('Toolhead', this.aceManager?.toolhead_sensor),
++      describe('Splitter', this.aceManager?.rdm_sensor)
++    ].filter(sensor => sensor.label !== 'n/a')
++  }
++
++  get toolMapText (): string {
++    const map = this.aceManager?.tool_map ?? {}
++
++    return Object.entries(map)
++      .map(([from, to]) => `T${from}→T${to}`)
++      .join(', ')
++  }
++
++  get canMove (): boolean {
++    return this.klippyReady && this.aceEnabled && !this.aceIsPrinting
++  }
++
++  openSlot (unit: number, slot: number) {
++    this.dialog = { open: true, unit, slot }
++  }
++
++  refresh () {
++    this.aceSendGcode('ACE_QUERY_SLOTS')
++  }
++
++  setEnabled (enabled: boolean) {
++    if (this.aceEnablePinName) {
++      this.aceSendGcode(`SET_PIN PIN=${this.aceEnablePinName} VALUE=${enabled ? 1 : 0}`)
++    }
++  }
++
++  async unloadCurrent () {
++    const result = await this.$confirm(
++      `Unload T${this.aceCurrentTool} back to the ACE?`,
++      { title: 'Unload tool', color: 'card-heading', icon: '$error' }
++    )
++
++    if (result) {
++      this.aceSendGcode('TR')
++    }
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++.ace-status-row :deep(.v-chip) {
++  text-transform: none;
++}
++</style>
+diff --git a/src/components/widgets/acepro/AceProSettingsMenu.vue b/src/components/widgets/acepro/AceProSettingsMenu.vue
+new file mode 100644
+index 0000000..1d1c0e4
+--- /dev/null
++++ b/src/components/widgets/acepro/AceProSettingsMenu.vue
+@@ -0,0 +1,194 @@
++<template>
++  <v-menu
++    bottom
++    left
++    offset-y
++    transition="slide-y-transition"
++    :close-on-content-click="false"
++    min-width="280"
++  >
++    <template #activator="{ on, attrs }">
++      <app-btn
++        icon
++        small
++        v-bind="attrs"
++        v-on="on"
++      >
++        <v-icon dense>
++          $cog
++        </v-icon>
++      </app-btn>
++    </template>
++
++    <v-list dense>
++      <v-list-item
++        v-if="aceEnablePinName"
++        :disabled="!klippyReady"
++        @click="setEnabled(!aceEnabled)"
++      >
++        <v-list-item-action class="my-0">
++          <v-switch
++            :input-value="aceEnabled"
++            readonly
++            hide-details
++            dense
++          />
++        </v-list-item-action>
++        <v-list-item-title>ACE Pro support</v-list-item-title>
++      </v-list-item>
++
++      <v-list-item
++        :disabled="!klippyReady"
++        @click="toggleEndlessSpool"
++      >
++        <v-list-item-action class="my-0">
++          <v-switch
++            :input-value="endlessSpool"
++            readonly
++            hide-details
++            dense
++          />
++        </v-list-item-action>
++        <v-list-item-title>Endless spool</v-list-item-title>
++      </v-list-item>
++
++      <v-list-item v-if="endlessSpool">
++        <v-select
++          :value="endlessMode"
++          :items="endlessModes"
++          label="Match spool by"
++          dense
++          outlined
++          hide-details
++          class="my-1"
++          :disabled="!klippyReady"
++          @change="setEndlessMode"
++        />
++      </v-list-item>
++
++      <v-list-item
++        :disabled="!klippyReady"
++        @click="toggleRfid"
++      >
++        <v-list-item-action class="my-0">
++          <v-switch
++            :input-value="rfidSync"
++            readonly
++            hide-details
++            dense
++          />
++        </v-list-item-action>
++        <v-list-item-title>RFID inventory sync</v-list-item-title>
++      </v-list-item>
++
++      <v-divider class="my-1" />
++
++      <v-list-item
++        :disabled="!canMove"
++        @click="confirmRun('Feed every loaded slot to the toolhead sensor to check the inventory?', 'ACE_SMART_LOAD')"
++      >
++        <v-list-item-title>Smart load (verify all slots)</v-list-item-title>
++      </v-list-item>
++      <v-list-item
++        :disabled="!canMove"
++        @click="confirmRun('Unload whatever filament is in the toolhead, using the sensors to find it?', 'ACE_SMART_UNLOAD')"
++      >
++        <v-list-item-title>Smart unload</v-list-item-title>
++      </v-list-item>
++      <v-list-item
++        :disabled="!klippyReady || !aceEnabled"
++        @click="run('ACE_RECONNECT')"
++      >
++        <v-list-item-title>Reconnect ACE units</v-list-item-title>
++      </v-list-item>
++      <v-list-item
++        :disabled="!klippyReady || aceIsPrinting"
++        @click="confirmRun(resetText, 'ACE_RESET_ACTIVE_TOOLHEAD')"
++      >
++        <v-list-item-title class="error--text">
++          Reset active tool…
++        </v-list-item-title>
++      </v-list-item>
++    </v-list>
++  </v-menu>
++</template>
++
++<script lang="ts">
++import { Component, Mixins } from 'vue-property-decorator'
++import AceProMixin from './acepro'
++import type { AceEndlessSpoolMode } from './types'
++
++@Component
++export default class AceProSettingsMenu extends Mixins(AceProMixin) {
++  readonly endlessModes: Array<{ value: AceEndlessSpoolMode, text: string }> = [
++    { value: 'exact', text: 'Material and color' },
++    { value: 'material', text: 'Material only' },
++    { value: 'next', text: 'Next ready slot' }
++  ]
++
++  readonly resetText = 'Clear the loaded tool (set it to none) and filament position back to bowden? ' +
++    'Use only after an error, once all filament has been pulled back past the splitter.'
++
++  get endlessSpool (): boolean {
++    return this.aceManager?.endless_spool_enabled === true
++  }
++
++  get endlessMode (): AceEndlessSpoolMode {
++    return this.aceManager?.endless_spool_match_mode ?? 'exact'
++  }
++
++  get rfidSync (): boolean {
++    return this.aceUnits[0]?.state.rfid_sync_enabled === true
++  }
++
++  get canMove (): boolean {
++    return this.klippyReady && this.aceEnabled && !this.aceIsPrinting
++  }
++
++  run (gcode: string) {
++    this.aceSendGcode(gcode)
++  }
++
++  async confirmRun (text: string, gcode: string) {
++    const result = await this.$confirm(text, {
++      title: 'ACE Pro',
++      color: 'card-heading',
++      icon: '$error'
++    })
++
++    if (result) {
++      this.run(gcode)
++    }
++  }
++
++  setEnabled (enabled: boolean) {
++    if (this.aceEnablePinName) {
++      this.run(`SET_PIN PIN=${this.aceEnablePinName} VALUE=${enabled ? 1 : 0}`)
++    }
++  }
++
++  // Printers with an [output_pin endless_spool] toggle poll that pin and push it to
++  // the driver, so flip the pin instead of calling the driver directly.
++  get endlessSpoolPinName (): string | undefined {
++    return Object.keys(this.$typedState.printer.printer)
++      .find(key => key.toLowerCase() === 'output_pin endless_spool')
++      ?.substring('output_pin '.length)
++  }
++
++  toggleEndlessSpool () {
++    if (this.endlessSpoolPinName) {
++      this.run(`SET_PIN PIN=${this.endlessSpoolPinName} VALUE=${this.endlessSpool ? 0 : 1}`)
++    } else {
++      this.run(this.endlessSpool ? 'ACE_DISABLE_ENDLESS_SPOOL' : 'ACE_ENABLE_ENDLESS_SPOOL')
++    }
++  }
++
++  setEndlessMode (mode: AceEndlessSpoolMode) {
++    this.run(`ACE_SET_ENDLESS_SPOOL_MODE MODE=${mode}`)
++  }
++
++  toggleRfid () {
++    this.run(this.rfidSync ? 'ACE_DISABLE_RFID_SYNC' : 'ACE_ENABLE_RFID_SYNC')
++  }
++}
++</script>
+diff --git a/src/components/widgets/acepro/AceProSlot.vue b/src/components/widgets/acepro/AceProSlot.vue
+new file mode 100644
+index 0000000..3ea2cd9
+--- /dev/null
++++ b/src/components/widgets/acepro/AceProSlot.vue
+@@ -0,0 +1,175 @@
++<template>
++  <div
++    class="ace-slot rounded text-center py-1"
++    :class="{ 'ace-slot--active': active, 'ace-slot--empty': empty }"
++    role="button"
++    tabindex="0"
++    :title="tooltip"
++    @click="$emit('click')"
++    @keydown.enter="$emit('click')"
++  >
++    <div class="text-caption font-weight-bold">
++      T{{ slotState.tool }}
++    </div>
++    <div
++      class="text-overline ace-slot__status"
++      :class="statusClass"
++    >
++      {{ statusLabel }}
++    </div>
++
++    <svg
++      viewBox="0 0 64 64"
++      class="ace-spool"
++      :class="{ 'ace-spool--feeding': feeding }"
++    >
++      <circle
++        cx="32"
++        cy="32"
++        r="29"
++        :fill="empty ? 'transparent' : color"
++        :stroke="empty ? '#888' : 'rgba(0,0,0,0.35)'"
++        stroke-width="2"
++        :stroke-dasharray="empty ? '4 3' : undefined"
++      />
++      <circle
++        v-if="!empty"
++        cx="32"
++        cy="32"
++        r="20"
++        fill="none"
++        stroke="rgba(0,0,0,0.18)"
++        stroke-width="1"
++      />
++      <circle
++        cx="32"
++        cy="32"
++        r="11"
++        :fill="hubColor"
++        stroke="rgba(0,0,0,0.4)"
++        stroke-width="1"
++      />
++      <circle
++        cx="32"
++        cy="32"
++        r="4"
++        fill="rgba(0,0,0,0.6)"
++      />
++    </svg>
++
++    <div class="text-caption font-weight-bold text-truncate px-1">
++      {{ empty ? '---' : material }}
++      <v-icon
++        v-if="rfid"
++        x-small
++        title="Read from RFID tag"
++      >
++        {{ icons.nfc }}
++      </v-icon>
++    </div>
++    <div class="text-caption secondary--text">
++      {{ empty || !slotState.temp ? '--' : `${slotState.temp}°C` }}
++    </div>
++  </div>
++</template>
++
++<script lang="ts">
++import { Component, Mixins, Prop } from 'vue-property-decorator'
++import { mdiNfcVariant } from '@mdi/js'
++import AceProMixin from './acepro'
++import type { AceSlotState } from './types'
++
++@Component
++export default class AceProSlot extends Mixins(AceProMixin) {
++  @Prop({ type: Object, required: true })
++  readonly slotState!: AceSlotState
++
++  @Prop({ type: Boolean })
++  readonly active?: boolean
++
++  @Prop({ type: Boolean })
++  readonly feeding?: boolean
++
++  readonly icons = { nfc: mdiNfcVariant }
++
++  get empty (): boolean {
++    return this.aceSlotIsEmpty(this.slotState)
++  }
++
++  get color (): string {
++    return this.aceSlotColor(this.slotState)
++  }
++
++  get hubColor (): string {
++    return this.$vuetify.theme.dark ? '#2b2b2b' : '#e0e0e0'
++  }
++
++  get material (): string {
++    return this.aceSlotMaterial(this.slotState)
++  }
++
++  get rfid (): boolean {
++    return this.aceSlotIsRfid(this.slotState)
++  }
++
++  get statusLabel (): string {
++    if (this.active) return 'loaded'
++    if (this.feeding) return 'feeding'
++    return this.slotState.status || 'unknown'
++  }
++
++  get statusClass (): string {
++    if (this.active) return 'primary--text'
++    if (this.feeding) return 'orange--text'
++    if (this.empty) return 'grey--text'
++    if (this.slotState.status === 'ready') return 'success--text'
++    return 'warning--text'
++  }
++
++  get tooltip (): string {
++    const parts = [`T${this.slotState.tool}`, this.material, this.slotState.brand, this.slotState.sku]
++      .filter(Boolean)
++
++    return `${parts.join(' · ')} — click to edit or move`
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++.ace-slot {
++  cursor: pointer;
++  border: 2px solid transparent;
++  transition: border-color 0.15s, background-color 0.15s;
++}
++
++.ace-slot:hover,
++.ace-slot:focus-visible {
++  background-color: rgba(128, 128, 128, 0.12);
++  outline: none;
++}
++
++.ace-slot--active {
++  border-color: var(--v-primary-base);
++}
++
++.ace-slot__status {
++  line-height: 1.2;
++  letter-spacing: 0.05em !important;
++}
++
++.ace-spool {
++  width: 56px;
++  max-width: 100%;
++  height: auto;
++  margin: 2px auto;
++  display: block;
++}
++
++.ace-spool--feeding {
++  animation: ace-spin 3s linear infinite;
++}
++
++@keyframes ace-spin {
++  to { transform: rotate(-360deg); }
++}
++</style>
+diff --git a/src/components/widgets/acepro/AceProSlotDialog.vue b/src/components/widgets/acepro/AceProSlotDialog.vue
+new file mode 100644
+index 0000000..8686e6a
+--- /dev/null
++++ b/src/components/widgets/acepro/AceProSlotDialog.vue
+@@ -0,0 +1,418 @@
++<template>
++  <app-dialog
++    v-model="open"
++    :title="title"
++    width="460"
++    save-button-text="Save filament"
++    :save-button-disabled="!canSave"
++    @save="save"
++  >
++    <v-card-text class="pb-0">
++      <v-alert
++        v-if="rfid"
++        dense
++        text
++        type="info"
++        class="text-caption mb-3"
++      >
++        This spool was read from its RFID tag
++        <template v-if="slotState.brand || slotState.sku">
++          ({{ [slotState.brand, slotState.sku].filter(Boolean).join(' · ') }})
++        </template>.
++        Saving here overrides it until the spool is swapped.
++      </v-alert>
++
++      <v-row dense>
++        <v-col cols="7">
++          <v-combobox
++            v-model="material"
++            :items="materials"
++            label="Material"
++            dense
++            outlined
++            hide-details
++            @change="applyMaterialDefault"
++          />
++        </v-col>
++        <v-col cols="5">
++          <v-text-field
++            v-model.number="temp"
++            label="Print temp"
++            suffix="°C"
++            type="number"
++            :min="0"
++            :max="300"
++            dense
++            outlined
++            hide-details
++          />
++        </v-col>
++      </v-row>
++
++      <div class="d-flex align-center mt-3">
++        <span class="text-body-2 mr-2">Color</span>
++        <div
++          class="ace-swatch mr-2"
++          :style="{ backgroundColor: color }"
++        />
++        <code class="text-caption">{{ color }}</code>
++        <v-spacer />
++        <app-btn
++          x-small
++          text
++          @click="showPicker = !showPicker"
++        >
++          {{ showPicker ? 'Hide picker' : 'Pick color' }}
++        </app-btn>
++      </div>
++      <div class="d-flex flex-wrap mt-2">
++        <div
++          v-for="preset in colorPresets"
++          :key="`preset:${preset}`"
++          class="ace-swatch ace-swatch--preset mr-1 mb-1"
++          role="button"
++          :title="preset"
++          :style="{ backgroundColor: preset }"
++          @click="color = preset"
++        />
++      </div>
++      <v-color-picker
++        v-if="showPicker"
++        :value="color"
++        mode="rgba"
++        hide-mode-switch
++        hide-inputs
++        class="mx-auto mt-2"
++        @update:color="setColor"
++      />
++
++      <v-divider class="my-3" />
++
++      <div class="text-subtitle-2 mb-1">
++        Slot actions
++      </div>
++      <div
++        v-if="moveBlockedReason"
++        class="text-caption warning--text mb-2"
++      >
++        {{ moveBlockedReason }}
++      </div>
++
++      <div class="d-flex flex-wrap ace-actions">
++        <app-btn
++          v-if="!isActive"
++          small
++          color="primary"
++          :disabled="!canMove || empty"
++          @click="run(`T${tool}`, true)"
++        >
++          Load T{{ tool }}
++        </app-btn>
++        <app-btn
++          v-else
++          small
++          color="warning"
++          :disabled="!canMove"
++          @click="run('TR', true)"
++        >
++          Unload T{{ tool }}
++        </app-btn>
++        <app-btn
++          small
++          outlined
++          :disabled="!canMove || empty"
++          @click="fullUnload"
++        >
++          Retract to ACE
++        </app-btn>
++        <app-btn
++          small
++          outlined
++          :color="feeding ? 'orange' : undefined"
++          :disabled="!canAssist"
++          @click="run(`ACE_${feeding ? 'DISABLE' : 'ENABLE'}_FEED_ASSIST T=${tool}`)"
++        >
++          {{ feeding ? 'Feed assist off' : 'Feed assist on' }}
++        </app-btn>
++      </div>
++
++      <v-row
++        dense
++        class="mt-2 align-center"
++      >
++        <v-col cols="4">
++          <v-text-field
++            v-model.number="moveLength"
++            label="Length"
++            suffix="mm"
++            type="number"
++            :min="1"
++            dense
++            outlined
++            hide-details
++          />
++        </v-col>
++        <v-col cols="3">
++          <v-text-field
++            v-model.number="moveSpeed"
++            label="Speed"
++            suffix="mm/s"
++            type="number"
++            :min="1"
++            dense
++            outlined
++            hide-details
++          />
++        </v-col>
++        <v-col
++          cols="5"
++          class="d-flex"
++        >
++          <app-btn
++            small
++            outlined
++            color="success"
++            class="mr-1"
++            :disabled="!canMove || !validMove"
++            @click="run(`ACE_FEED T=${tool} LENGTH=${moveLength} SPEED=${moveSpeed}`)"
++          >
++            Feed
++          </app-btn>
++          <app-btn
++            small
++            outlined
++            color="error"
++            :disabled="!canMove || !validMove"
++            @click="run(`ACE_RETRACT T=${tool} LENGTH=${moveLength} SPEED=${moveSpeed}`)"
++          >
++            Retract
++          </app-btn>
++        </v-col>
++      </v-row>
++      <div class="d-flex mt-1 mb-3">
++        <app-btn
++          x-small
++          text
++          :disabled="!klippyReady || !aceEnabled"
++          @click="run(`ACE_STOP_FEED T=${tool}\nACE_STOP_RETRACT T=${tool}`)"
++        >
++          Stop motor
++        </app-btn>
++      </div>
++    </v-card-text>
++
++    <template #actions>
++      <app-btn
++        text
++        color="error"
++        :disabled="!klippyReady || isActive"
++        @click="markEmpty"
++      >
++        Mark empty
++      </app-btn>
++      <v-spacer />
++      <app-btn
++        color="warning"
++        text
++        @click="open = false"
++      >
++        Close
++      </app-btn>
++      <app-btn
++        color="primary"
++        type="submit"
++        :disabled="!canSave"
++      >
++        Save filament
++      </app-btn>
++    </template>
++  </app-dialog>
++</template>
++
++<script lang="ts">
++import { Component, Mixins, Prop, VModel } from 'vue-property-decorator'
++import AceProMixin, { ACE_MATERIAL_TEMPS } from './acepro'
++import type { AceSlotState, AceUnit } from './types'
++
++@Component
++export default class AceProSlotDialog extends Mixins(AceProMixin) {
++  @VModel({ type: Boolean })
++  open!: boolean
++
++  @Prop({ type: Number, required: true })
++  readonly unitIndex!: number
++
++  @Prop({ type: Number, required: true })
++  readonly slotIndex!: number
++
++  material = ''
++  temp = 0
++  color = '#FF0000'
++  showPicker = false
++  moveLength = 50
++  moveSpeed = 25
++
++  readonly materials = Object.keys(ACE_MATERIAL_TEMPS)
++
++  readonly colorPresets = [
++    '#FFFFFF', '#000000', '#808080', '#FF0000', '#FF7F00', '#FFD700',
++    '#00A651', '#00BFFF', '#0047AB', '#8A2BE2', '#FF69B4', '#8B4513'
++  ]
++
++  created () {
++    const slot = this.slotState
++
++    this.material = this.aceSlotIsEmpty(slot) ? 'PLA' : (slot.material || 'PLA')
++    this.temp = slot.temp || ACE_MATERIAL_TEMPS[this.material] || 210
++    this.color = this.aceSlotIsEmpty(slot) ? '#FF0000' : this.aceSlotColor(slot).toUpperCase()
++  }
++
++  get unit (): AceUnit {
++    return this.aceUnits.find(u => u.index === this.unitIndex) ?? { index: this.unitIndex, state: {} }
++  }
++
++  get slotState (): AceSlotState {
++    return this.aceUnitSlots(this.unit)[this.slotIndex]
++  }
++
++  get tool (): number {
++    return this.slotState.tool ?? this.unitIndex * 4 + this.slotIndex
++  }
++
++  get title (): string {
++    const where = this.aceUnits.length > 1
++      ? `ACE ${this.unitIndex + 1}, slot ${this.slotIndex + 1}`
++      : `Slot ${this.slotIndex + 1}`
++
++    return `T${this.tool} · ${where}`
++  }
++
++  get empty (): boolean {
++    return this.aceSlotIsEmpty(this.slotState)
++  }
++
++  get rfid (): boolean {
++    return this.aceSlotIsRfid(this.slotState)
++  }
++
++  get isActive (): boolean {
++    return this.aceCurrentTool === this.tool
++  }
++
++  get feeding (): boolean {
++    return this.unit.state.feed_assist_slot === this.slotIndex
++  }
++
++  get canMove (): boolean {
++    return this.klippyReady && this.aceEnabled && !this.aceIsPrinting
++  }
++
++  get canAssist (): boolean {
++    return this.klippyReady && this.aceEnabled && !(this.aceIsPrinting && !this.feeding)
++  }
++
++  get moveBlockedReason (): string {
++    if (!this.klippyReady) return 'Klipper is not ready.'
++    if (!this.aceEnabled) return 'ACE Pro support is off — turn it on to move filament.'
++    if (this.aceIsPrinting) return 'Moves are locked while a print is running or paused.'
++    return ''
++  }
++
++  get validMove (): boolean {
++    return this.moveLength > 0 && this.moveLength <= 2000 && this.moveSpeed > 0 && this.moveSpeed <= 100
++  }
++
++  get canSave (): boolean {
++    return (
++      this.klippyReady &&
++      !!this.material?.trim() &&
++      Number.isFinite(this.temp) &&
++      this.temp >= 0 &&
++      this.temp <= 300 &&
++      /^#[0-9a-f]{6}$/i.test(this.color)
++    )
++  }
++
++  get rgb (): string {
++    const hex = this.color.substring(1)
++
++    return [0, 2, 4]
++      .map(offset => parseInt(hex.substring(offset, offset + 2), 16))
++      .join(',')
++  }
++
++  applyMaterialDefault (value: string | null) {
++    const key = (value ?? '').toUpperCase()
++
++    if (key in ACE_MATERIAL_TEMPS) {
++      this.temp = ACE_MATERIAL_TEMPS[key]
++    }
++  }
++
++  setColor (value: { hex: string }) {
++    this.color = value.hex.substring(0, 7).toUpperCase()
++  }
++
++  run (gcode: string, close = false) {
++    this.aceSendGcode(gcode)
++
++    if (close) {
++      this.open = false
++    }
++  }
++
++  save () {
++    if (!this.canSave) return
++
++    const material = this.material.trim().replace(/["\s]+/g, '_')
++
++    this.aceSendGcode(
++      `ACE_SET_SLOT INSTANCE=${this.unitIndex} INDEX=${this.slotIndex} MATERIAL="${material}" TEMP=${Math.round(this.temp)} COLOR="${this.rgb}"`
++    )
++    this.open = false
++  }
++
++  async markEmpty () {
++    const result = await this.$confirm(
++      `Mark T${this.tool} as empty? This only clears the saved filament info.`,
++      { title: 'Mark slot empty', color: 'card-heading', icon: '$error' }
++    )
++
++    if (result) {
++      this.aceSendGcode(`ACE_SET_SLOT INSTANCE=${this.unitIndex} INDEX=${this.slotIndex} EMPTY=1`)
++      this.open = false
++    }
++  }
++
++  async fullUnload () {
++    const result = await this.$confirm(
++      `Retract T${this.tool} all the way back into the ACE until the slot reads empty?`,
++      { title: 'Retract to ACE', color: 'card-heading', icon: '$error' }
++    )
++
++    if (result) {
++      this.aceSendGcode(`ACE_FULL_UNLOAD TOOL=${this.tool}`)
++      this.open = false
++    }
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++.ace-swatch {
++  width: 22px;
++  height: 22px;
++  border-radius: 50%;
++  border: 1px solid rgba(128, 128, 128, 0.6);
++}
++
++.ace-swatch--preset {
++  cursor: pointer;
++  width: 20px;
++  height: 20px;
++}
++
++.ace-actions > * {
++  margin: 0 6px 6px 0;
++}
++</style>
+diff --git a/src/components/widgets/acepro/AceProUnit.vue b/src/components/widgets/acepro/AceProUnit.vue
+new file mode 100644
+index 0000000..c27fd3e
+--- /dev/null
++++ b/src/components/widgets/acepro/AceProUnit.vue
+@@ -0,0 +1,234 @@
++<template>
++  <div
++    class="ace-unit rounded pa-2"
++    :class="$vuetify.theme.dark ? 'grey darken-4' : 'grey lighten-4'"
++  >
++    <div class="d-flex align-center flex-wrap mb-2">
++      <span
++        v-if="showTitle"
++        class="font-weight-bold mr-2"
++      >
++        ACE {{ unit.index + 1 }}
++      </span>
++      <v-chip
++        x-small
++        label
++        :color="connectionColor"
++        class="mr-2"
++      >
++        {{ connectionLabel }}
++      </v-chip>
++      <span class="text-caption secondary--text text-truncate">
++        {{ deviceLabel }}
++      </span>
++      <v-spacer />
++      <span
++        class="text-caption"
++        title="ACE chamber"
++      >
++        <v-icon x-small>$thermometer</v-icon>
++        {{ temperatureLabel }}
++        <template v-if="unit.state.humidity">
++          · {{ unit.state.humidity }}% RH
++        </template>
++      </span>
++    </div>
++
++    <v-row
++      dense
++      no-gutters
++    >
++      <v-col
++        v-for="slot in slots"
++        :key="`ace-slot:${unit.index}:${slot.index}`"
++        cols="3"
++        class="px-1"
++      >
++        <ace-pro-slot
++          :slot-state="slot"
++          :active="slot.tool === aceCurrentTool"
++          :feeding="unit.state.feed_assist_slot === slot.index"
++          @click="$emit('slot-click', slot.index)"
++        />
++      </v-col>
++    </v-row>
++
++    <v-divider class="my-2" />
++
++    <div class="d-flex align-center flex-wrap">
++      <v-icon
++        small
++        class="mr-1"
++        :color="drying ? 'orange' : undefined"
++      >
++        $fan
++      </v-icon>
++      <span class="text-body-2 mr-2">Dryer</span>
++      <v-chip
++        x-small
++        label
++        :color="drying ? 'orange' : undefined"
++        :class="{ 'ace-pulse': drying }"
++        class="mr-2"
++      >
++        {{ drying ? `${dryer.target_temp || '?'}°C · ${remainingLabel} left` : 'Idle' }}
++      </v-chip>
++      <v-spacer />
++      <template v-if="!drying">
++        <v-select
++          v-model="dryTemp"
++          :items="tempOptions"
++          suffix="°C"
++          dense
++          outlined
++          hide-details
++          class="ace-compact-select mr-1"
++        />
++        <v-select
++          v-model="dryDuration"
++          :items="durationOptions"
++          dense
++          outlined
++          hide-details
++          class="ace-compact-select mr-1"
++        />
++      </template>
++      <app-btn
++        x-small
++        :color="drying ? 'error' : 'primary'"
++        :disabled="!klippyReady || !aceUnitConnected(unit)"
++        @click="toggleDryer"
++      >
++        {{ drying ? 'Stop' : 'Dry' }}
++      </app-btn>
++    </div>
++  </div>
++</template>
++
++<script lang="ts">
++import { Component, Mixins, Prop } from 'vue-property-decorator'
++import AceProMixin from './acepro'
++import AceProSlot from './AceProSlot.vue'
++import type { AceDryerState, AceSlotState, AceUnit } from './types'
++
++@Component({
++  components: {
++    AceProSlot
++  }
++})
++export default class AceProUnit extends Mixins(AceProMixin) {
++  @Prop({ type: Object, required: true })
++  readonly unit!: AceUnit
++
++  @Prop({ type: Boolean })
++  readonly showTitle?: boolean
++
++  dryTemp = 50
++  dryDuration = 240
++
++  readonly tempOptions = [35, 40, 45, 50, 55, 60, 65]
++
++  readonly durationOptions = [30, 60, 120, 180, 240, 360, 480, 720]
++    .map(value => ({ value, text: value < 60 ? `${value} min` : `${value / 60} h` }))
++
++  get slots (): AceSlotState[] {
++    return this.aceUnitSlots(this.unit)
++  }
++
++  get dryer (): AceDryerState {
++    return this.aceUnitDryer(this.unit)
++  }
++
++  get drying (): boolean {
++    return this.aceIsDrying(this.dryer)
++  }
++
++  get remainingLabel (): string {
++    const total = this.aceDryerRemainingSeconds(this.dryer)
++    const hours = Math.floor(total / 3600)
++    const minutes = Math.floor((total % 3600) / 60)
++
++    return hours > 0
++      ? `${hours}h ${minutes.toString().padStart(2, '0')}m`
++      : `${minutes}m`
++  }
++
++  get connectionLabel (): string {
++    const state = this.unit.state.connection_state
++
++    if (!state) return 'no data'
++    return state
++  }
++
++  get connectionColor (): string | undefined {
++    switch (this.unit.state.connection_state) {
++      case 'connected': return 'success'
++      case 'connecting':
++      case 'initializing':
++      case 'reconnecting': return 'warning'
++      case 'disabled': return undefined
++      default: return 'error'
++    }
++  }
++
++  get deviceLabel (): string {
++    const parts = [
++      this.unit.state.model,
++      this.unit.state.firmware ? `fw ${this.unit.state.firmware}` : undefined,
++      this.unit.state.usb_port
++    ].filter(Boolean)
++
++    return parts.join(' · ')
++  }
++
++  get temperatureLabel (): string {
++    const temp = this.unit.state.temp
++
++    return typeof temp === 'number' && temp > 0
++      ? `${temp}°C`
++      : '--°C'
++  }
++
++  async toggleDryer () {
++    const instance = this.unit.index
++
++    if (this.drying) {
++      const result = await this.$confirm(
++        'Stop drying? This turns off the ACE heater and fans.',
++        { title: 'Stop dryer', color: 'card-heading', icon: '$error' }
++      )
++
++      if (result) {
++        this.aceSendGcode(`ACE_STOP_DRYING INSTANCE=${instance}`)
++      }
++      return
++    }
++
++    this.aceSendGcode(`ACE_START_DRYING INSTANCE=${instance} TEMP=${this.dryTemp} DURATION=${this.dryDuration}`)
++  }
++}
++</script>
++
++<style lang="scss" scoped>
++.ace-compact-select {
++  max-width: 96px;
++  font-size: 0.8rem;
++}
++
++.ace-compact-select :deep(.v-input__slot) {
++  min-height: 28px !important;
++}
++
++.ace-compact-select :deep(.v-input__append-inner) {
++  margin-top: 2px !important;
++}
++
++.ace-pulse {
++  animation: ace-pulse 2s infinite ease-in-out;
++}
++
++@keyframes ace-pulse {
++  0%, 100% { opacity: 1; }
++  50% { opacity: 0.55; }
++}
++</style>
+diff --git a/src/components/widgets/acepro/acepro.ts b/src/components/widgets/acepro/acepro.ts
+new file mode 100644
+index 0000000..03486a2
+--- /dev/null
++++ b/src/components/widgets/acepro/acepro.ts
+@@ -0,0 +1,172 @@
++import { Component, Mixins } from 'vue-property-decorator'
++import StateMixin from '@/mixins/state'
++import type {
++  AceDryerState,
++  AceFilamentPosition,
++  AceManagerState,
++  AceSlotState,
++  AceUnit
++} from './types'
++
++export const ACE_SLOTS_PER_UNIT = 4
++
++export const ACE_MATERIAL_TEMPS: Record<string, number> = {
++  PLA: 210,
++  'PLA+': 215,
++  'PLA-CF': 220,
++  PETG: 240,
++  'PETG-CF': 250,
++  ABS: 250,
++  ASA: 255,
++  TPU: 225,
++  PA: 260,
++  'PA-CF': 270,
++  PC: 270,
++  PVA: 200,
++  HIPS: 230
++}
++
++const isObject = (value: unknown): value is Record<string, unknown> =>
++  value != null && typeof value === 'object' && !Array.isArray(value)
++
++@Component
++export default class AceProMixin extends Mixins(StateMixin) {
++  get aceManager (): AceManagerState | undefined {
++    const ace = this.$typedState.printer.printer.ace
++
++    return isObject(ace) && 'ace_instances' in ace
++      ? ace
++      : undefined
++  }
++
++  get aceSupported (): boolean {
++    return this.aceManager != null
++  }
++
++  get aceEnabled (): boolean {
++    return this.aceManager?.ace_pro_enabled === true
++  }
++
++  get aceUnits (): AceUnit[] {
++    const printer = this.$typedState.printer.printer
++    const count = Math.max(1, this.aceManager?.ace_instances ?? 1)
++    const units: AceUnit[] = []
++
++    for (let index = 0; index < count; index++) {
++      const state = printer[`ace_instance_${index}`]
++
++      units.push({
++        index,
++        state: isObject(state) ? state : {}
++      })
++    }
++
++    return units
++  }
++
++  get aceCurrentTool (): number {
++    const value = this.aceManager?.current_index
++
++    return typeof value === 'number' ? value : -1
++  }
++
++  get aceSaveVariables (): Record<string, unknown> {
++    const variables = this.$typedState.printer.printer.save_variables?.variables
++
++    return isObject(variables) ? variables : {}
++  }
++
++  get aceFilamentPosition (): AceFilamentPosition {
++    const value = this.aceSaveVariables.ace_filament_pos
++
++    return typeof value === 'string' ? value : 'unknown'
++  }
++
++  get aceIsPrinting (): boolean {
++    const state = this.$typedState.printer.printer.print_stats?.state
++
++    return state === 'printing' || state === 'paused'
++  }
++
++  get aceEnablePinName (): string | undefined {
++    const printer = this.$typedState.printer.printer
++
++    return Object.keys(printer)
++      .find(key => key.toLowerCase() === 'output_pin ace_pro')
++      ?.substring('output_pin '.length)
++  }
++
++  aceUnitSlots (unit: AceUnit): AceSlotState[] {
++    const slots = Array.isArray(unit.state.slots) ? unit.state.slots : []
++    const result: AceSlotState[] = []
++
++    for (let index = 0; index < ACE_SLOTS_PER_UNIT; index++) {
++      const slot = slots.find(s => s?.index === index)
++
++      result.push({
++        index,
++        tool: unit.index * ACE_SLOTS_PER_UNIT + index,
++        status: 'unknown',
++        ...slot
++      })
++    }
++
++    return result
++  }
++
++  aceUnitDryer (unit: AceUnit): AceDryerState {
++    return unit.state.dryer_status ?? unit.state.dryer ?? { status: 'stop' }
++  }
++
++  aceIsDrying (dryer: AceDryerState): boolean {
++    return dryer.status != null && !['stop', 'stopped', 'idle', 'unknown'].includes(dryer.status)
++  }
++
++  /**
++   * The ACE Pro reports remain_time in minutes, ACE 2 in seconds.
++   * Anything larger than the requested duration must already be seconds.
++   */
++  aceDryerRemainingSeconds (dryer: AceDryerState): number {
++    const remain = Math.max(0, dryer.remain_time ?? 0)
++    const duration = dryer.duration ?? 0
++
++    if (duration > 0) {
++      return remain > duration + 1 ? remain : remain * 60
++    }
++
++    return remain < 1000 ? remain * 60 : remain
++  }
++
++  aceUnitConnected (unit: AceUnit): boolean {
++    return unit.state.connection_state === 'connected'
++  }
++
++  aceSlotIsEmpty (slot: AceSlotState): boolean {
++    return slot.status === 'empty'
++  }
++
++  aceSlotIsRfid (slot: AceSlotState): boolean {
++    return slot.rfid === true || slot.rfid === 1 || slot.rfid === 2
++  }
++
++  aceSlotColor (slot: AceSlotState): string {
++    const color = slot.color
++
++    if (!Array.isArray(color) || color.length < 3 || this.aceSlotIsEmpty(slot)) {
++      return '#5a5a5a'
++    }
++
++    return '#' + color
++      .slice(0, 3)
++      .map(c => Math.max(0, Math.min(255, Math.round(Number(c) || 0))).toString(16).padStart(2, '0'))
++      .join('')
++  }
++
++  aceSlotMaterial (slot: AceSlotState): string {
++    return slot.custom_name || slot.material || (this.aceSlotIsEmpty(slot) ? '' : 'Unknown')
++  }
++
++  aceSendGcode (gcode: string) {
++    this.sendGcode(gcode)
++  }
++}
+diff --git a/src/components/widgets/acepro/printStartState.ts b/src/components/widgets/acepro/printStartState.ts
+new file mode 100644
+index 0000000..84b3f38
+--- /dev/null
++++ b/src/components/widgets/acepro/printStartState.ts
+@@ -0,0 +1,12 @@
++import Vue from 'vue'
++
++// Shared open/close state for the ACE print-start spool picker.
++export const acePrintStartState = Vue.observable({
++  show: false,
++  filename: ''
++})
++
++export const openAcePrintStart = (filename: string) => {
++  acePrintStartState.filename = filename
++  acePrintStartState.show = true
++}
+diff --git a/src/components/widgets/acepro/types.ts b/src/components/widgets/acepro/types.ts
+new file mode 100644
+index 0000000..6c6450e
+--- /dev/null
++++ b/src/components/widgets/acepro/types.ts
+@@ -0,0 +1,61 @@
++// Status shapes published by the acepro-any-klipper driver.
++// `ace` is the manager object; each unit is `ace_instance_<n>`.
++
++export interface AceManagerState {
++  ace_instances?: number;
++  current_index?: number;
++  endless_spool_enabled?: boolean;
++  endless_spool_match_mode?: AceEndlessSpoolMode;
++  ace_pro_enabled?: boolean;
++  toolhead_sensor?: boolean | null;
++  rdm_sensor?: boolean | null;
++  tool_map?: Record<string, number>;
++  tool_map_file?: string;
++  tool_map_active?: boolean;
++}
++
++export type AceEndlessSpoolMode = 'exact' | 'material' | 'next'
++
++export interface AceDryerState {
++  status?: string;
++  target_temp?: number;
++  duration?: number;
++  remain_time?: number;
++}
++
++export interface AceSlotState {
++  index: number;
++  tool?: number;
++  status?: string;
++  color?: number[];
++  material?: string;
++  temp?: number;
++  rfid?: boolean | number;
++  sku?: string;
++  brand?: string;
++  custom_name?: string;
++}
++
++export interface AceInstanceState {
++  instance?: number;
++  status?: string;
++  model?: string;
++  firmware?: string;
++  protocol?: string;
++  usb_port?: string;
++  connection_state?: string;
++  rfid_sync_enabled?: boolean;
++  feed_assist_slot?: number;
++  temp?: number;
++  humidity?: number;
++  dryer?: AceDryerState;
++  dryer_status?: AceDryerState;
++  slots?: AceSlotState[];
++}
++
++export interface AceUnit {
++  index: number;
++  state: AceInstanceState;
++}
++
++export type AceFilamentPosition = 'bowden' | 'splitter' | 'toolhead' | 'nozzle' | string
+diff --git a/src/components/widgets/filesystem/FileSystem.vue b/src/components/widgets/filesystem/FileSystem.vue
+index f4066b6..4d240c4 100644
+--- a/src/components/widgets/filesystem/FileSystem.vue
++++ b/src/components/widgets/filesystem/FileSystem.vue
+@@ -135,6 +135,7 @@
+ </template>
+ 
+ <script lang="ts">
++import { openAcePrintStart } from '@/components/widgets/acepro/printStartState'
+ import { Component, Prop, Mixins, Watch } from 'vue-property-decorator'
+ import { SocketActions } from '@/api/socketActions'
+ import type { AppDirectory, AppFile, AppFileWithMeta, FileFilterType, FileBrowserEntry, RootProperties, MoonrakerPathContent } from '@/store/files/types'
+@@ -940,6 +941,15 @@ export default class FileSystem extends Mixins(StateMixin, FilesMixin, ServicesM
+       return
+     }
+ 
++    // ACE Pro: let the user pick which ACE spool prints each sliced filament
++    const ace = this.$typedState.printer.printer.ace
++
++    if (ace != null && 'ace_instances' in ace && ace.ace_pro_enabled === true) {
++      openAcePrintStart(filename)
++
++      return
++    }
++
+     if (this.$typedState.printer.printer.mmu?.enabled === true) {
+       if ('referenced_tools' in file) {
+         const mmuPrint = (file.referenced_tools?.length ?? 1) > 1 || this.$typedState.printer.printer.mmu?.gate !== -2
+diff --git a/src/components/widgets/status/PrinterStatusCard.vue b/src/components/widgets/status/PrinterStatusCard.vue
+index 4f36019..75b1be4 100644
+--- a/src/components/widgets/status/PrinterStatusCard.vue
++++ b/src/components/widgets/status/PrinterStatusCard.vue
+@@ -69,6 +69,7 @@
+ </template>
+ 
+ <script lang="ts">
++import { openAcePrintStart } from '@/components/widgets/acepro/printStartState'
+ import { Component, Mixins, Watch } from 'vue-property-decorator'
+ import { SocketActions } from '@/api/socketActions'
+ import StateMixin from '@/mixins/state'
+@@ -146,6 +147,15 @@ export default class PrinterStatusCard extends Mixins(StateMixin, AfcMixin) {
+       return
+     }
+ 
++    // ACE Pro: let the user pick which ACE spool prints each sliced filament
++    const ace = this.$typedState.printer.printer.ace
++
++    if (ace != null && 'ace_instances' in ace && ace.ace_pro_enabled === true) {
++      openAcePrintStart(filename)
++
++      return
++    }
++
+     if (this.$typedState.printer.printer.mmu?.enabled === true) {
+       if (fileWithMeta != null && 'referenced_tools' in fileWithMeta) {
+         const mmuPrint = (fileWithMeta.referenced_tools?.length ?? 1) > 1 || this.$typedState.printer.printer.mmu.gate !== -2
+diff --git a/src/store/layout/state.ts b/src/store/layout/state.ts
+index 36e57ac..83d761e 100644
+--- a/src/store/layout/state.ts
++++ b/src/store/layout/state.ts
+@@ -57,6 +57,7 @@ export const createState = (): LayoutState => {
+           { id: 'printer-status-card', enabled: true, collapsed: false },
+           { id: 'spoolman-card', enabled: true, collapsed: false },
+           { id: 'mmu-card', enabled: true, collapsed: false },
++          { id: 'ace-pro-card', enabled: true, collapsed: false },
+           { id: 'camera-card', enabled: true, collapsed: false },
+           { id: 'toolhead-card', enabled: true, collapsed: false },
+           { id: 'macros-card', enabled: true, collapsed: false },
+diff --git a/src/views/Dashboard.vue b/src/views/Dashboard.vue
+index a01c43f..37f59c8 100644
+--- a/src/views/Dashboard.vue
++++ b/src/views/Dashboard.vue
+@@ -55,6 +55,7 @@ import SensorsCard from '@/components/widgets/sensors/SensorsCard.vue'
+ import RunoutSensorsCard from '@/components/widgets/runout-sensors/RunoutSensorsCard.vue'
+ import BeaconCard from '@/components/widgets/beacon/BeaconCard.vue'
+ import AfcCard from '@/components/widgets/afc/AfcCard.vue'
++import AceProCard from '@/components/widgets/acepro/AceProCard.vue'
+ import type Sortable from 'sortablejs'
+ 
+ @Component({
+@@ -77,7 +78,8 @@ import type Sortable from 'sortablejs'
+     SensorsCard,
+     RunoutSensorsCard,
+     BeaconCard,
+-    AfcCard
++    AfcCard,
++    AceProCard
+   }
+ })
+ export default class Dashboard extends Mixins(StateMixin) {
+@@ -154,6 +156,12 @@ export default class Dashboard extends Mixins(StateMixin) {
+     return this.$typedGetters['printer/getSupportsAfc']
+   }
+ 
++  get supportsAcePro (): boolean {
++    const ace = this.$typedState.printer.printer.ace
++
++    return ace != null && 'ace_instances' in ace
++  }
++
+   get hasMacros (): boolean {
+     return this.$typedGetters['macros/getVisibleMacros'].length > 0
+   }
+@@ -237,6 +245,7 @@ export default class Dashboard extends Mixins(StateMixin) {
+     if (item.id === 'sensors-card' && !this.hasSensors) return true
+     if (item.id === 'temperature-card' && !this.hasHeatersOrTemperatureSensors) return true
+     if (item.id === 'afc-card' && !this.supportsAfc) return true
++    if (item.id === 'ace-pro-card' && !this.supportsAcePro) return true
+ 
+     // Otherwise return the opposite of whatever the enabled state is.
+     return !item.enabled

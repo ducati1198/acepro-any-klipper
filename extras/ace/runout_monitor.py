@@ -1,115 +1,180 @@
 """
-Runout and tangle monitoring module for ACE Pro filament management system.
+Runout and tangle monitoring for ACE Pro.
 
-This module handles filament runout detection during printing, coordinating
-with the endless spool system for automatic material swapping when runout
-is detected.
+Runout: toolhead sensor present → absent transition, coordinated with
+endless spool for automatic material swapping.
 
-Optional tangle detection (``tangle_detection: True`` in ``[ace]``):
-    While printing with feed-assist active, compares extruder stepper
-    movement against RDM encoder pulses.  If the extruder extrudes more
-    than ``tangle_detection_length`` (default 15 mm, configurable in
-    ``[ace]``) without any encoder activity, and both RDM and nozzle
-    sensors still show filament present, a spool tangle is declared —
-    the filament is stuck between the spool and RDM while the extruder
-    consumes the RDM-to-nozzle buffer.
+Tangle (optional): watches the ACE-reported ``cont_assist_time``
+field; pauses the print when it stays above ``tangle_pump_time``
+seconds.  Covers both generations — ACE2 firmware only self-detects
+blocked *commanded* feeds (slot goes ``gear_err``); during feed assist
+(the mid-print case) it pumps against a tangle indefinitely, exactly
+like ACE1.  Protocol decoders normalize ``cont_assist_time`` to seconds
+(ACE2 reports milliseconds on the wire).
+
+A spool running out AT the ACE produces the same continuous-pumping
+signature as a tangle ("nothing left to push" vs "can't push"), so a
+threshold crossing alone must not pause the print — the remaining
+filament in the bowden must keep printing until the toolhead sensor
+triggers normal runout/endless-spool handling.  The slot presence
+state disambiguates, with generation-specific timing:
+
+- ACE2 reports the slot ``empty`` immediately at sensor-clear, ~100 s
+  BEFORE its starved assist starts cycling (pump ramps that self-reset
+  at ~3.9 s, forever).  The empty-slot gate suppresses the detector for
+  the whole tail transit.
+- ACE1 keeps reporting ``ready`` until its starved assist gives up:
+  continuous pump ~5 s -> ``unwinding`` (resets the counter) ->
+  ``empty`` — i.e. the empty report arrives ~4 s AFTER the threshold
+  crossing.  The suspect window bridges that lag: a crossing arms a
+  verdict window (``tangle_verify_time``) instead of pausing; slot
+  going empty within it means runout (no pause), expiry with the slot
+  still non-empty means a real tangle (pause).  There is deliberately
+  NO "counter dropped" exit: ACE1's give-up unwind and ACE2's retry
+  cycling both reset the counter mid-runout, and real-tangle ramps can
+  dip — a drop proves nothing.
 """
 
 import logging
 
+from . import monitor_events
+
 from .config import (
-    SENSOR_TOOLHEAD,
-    SENSOR_RDM,
+    SENSOR_RUNOUT,
+    SLOTS_PER_ACE,
     get_instance_from_tool,
     get_local_slot,
+    get_tool_base,
     ACE_INSTANCES,
 )
 
 
 class RunoutMonitor:
-    """
-    Monitors filament sensors during printing and handles runout detection.
+    """Periodic monitor for filament runout and ACE-side tangle detection."""
 
-    Responsibilities:
-    - Track sensor state changes during print
-    - Detect filament runout (sensor present → absent transition)
-    - Detect spool tangle (extruder moves but encoder is stalled)
-    - Coordinate with endless spool for automatic material swapping
-    - Show user prompts when manual intervention needed
-    - Manage runout handling state machine
-
-    The monitor runs as a periodic callback registered with the Klipper reactor,
-    checking sensor states and print status to detect runout events.
-    """
-
-    # Default detection length for tangle checking (mm).
-    DEFAULT_TANGLE_DETECTION_LENGTH = 15.0
-
-    # How often the tangle check runs (seconds).  250 ms matches the
-    # Klipper filament_motion_sensor cadence.
-    TANGLE_CHECK_INTERVAL = 0.250
+    # pump_time defaults.  The default and floor are hardware-derived, not
+    # tuning headroom: ACE2 firmware's STARVED assist retry cycle (spool ran
+    # out at the ACE) self-resets at ~3.9 s (observed on fw V1.1.31), so any
+    # threshold at or below that band would cross on every ACE2 runout and
+    # only the empty-slot gate would stand between that and a false pause.
+    # Real tangles grow without bound on both generations, so a higher
+    # threshold costs only its own value in detection latency (1 s of
+    # cont_assist_time growth per wall-clock second).  Re-measure the retry
+    # cap before lowering these if a firmware update changes it.
+    DEFAULT_TANGLE_PUMP_TIME = 5.0
+    TANGLE_PUMP_TIME_FLOOR = 3.0
+    # Verdict window after a threshold crossing (see _check_tangle).  ACE1
+    # reports the slot empty ~4 s after the crossing (firmware-fixed give-up
+    # sequence, print-speed independent) — 7 s covers it ~2x over.  The
+    # window is a fallback: most real tangles exit earlier via the hard
+    # ceiling below, and ACE2 pauses at the crossing itself.
+    DEFAULT_TANGLE_VERIFY_TIME = 7.0
+    # Hard ceiling on continuous pumping: STARVED pumping is firmware-capped
+    # (ACE1 gives up and unwind-resets the counter at ~5-6 s, ACE2's retry
+    # cycle self-resets at ~3.9 s), so a counter at/above this value can only
+    # mean a real blockage with filament present.  Fires immediately, without
+    # waiting out the verdict window.  The floor keeps it above ACE1's
+    # give-up cap.
+    DEFAULT_TANGLE_HARD_LIMIT = 8.0
+    TANGLE_HARD_LIMIT_FLOOR = 6.5
 
     def __init__(self, printer, gcode, reactor, endless_spool, manager,
                  runout_debounce_count=1, tangle_detection=False,
-                 tangle_detection_length=None):
-        """
-        Initialize runout monitor.
+                 tangle_pump_time=None, tangle_verify_time=None,
+                 tangle_pump_time_hard=None):
+        """Initialize runout monitor.
 
         Args:
-            printer: Klipper printer object for accessing printer state
-            gcode: Klipper gcode object for sending commands and responses
-            reactor: Klipper reactor for timer management
-            endless_spool: EndlessSpool instance for automatic swapping
-            manager: AceManager instance (for sensor queries and state)
-            runout_debounce_count: Number of consecutive sensor-absent readings
-                required before confirming a runout event. At the default 50ms
-                poll interval, 3 readings ≈ 150ms debounce window. Set to 1
-                for immediate (no debounce) behaviour (default).
-            tangle_detection: When True, monitor encoder vs extruder
-                movement to detect spool tangles while printing.
-            tangle_detection_length: Distance in mm the extruder must
-                move without encoder activity before a tangle is declared.
-                Defaults to DEFAULT_TANGLE_DETECTION_LENGTH (15.0 mm).
+            printer, gcode, reactor: Klipper objects.
+            endless_spool: EndlessSpool instance for automatic swapping.
+            manager: AceManager (sensor queries, state, ACE instances).
+            runout_debounce_count: Consecutive sensor-absent reads before
+                confirming a runout (default 1 = no debounce).
+            tangle_detection: Enable pump_time tangle detection (ACE Gen 1).
+            tangle_pump_time: cont_assist_time threshold in seconds for
+                tangle trigger (default DEFAULT_TANGLE_PUMP_TIME, clamped
+                to TANGLE_PUMP_TIME_FLOOR).
+            tangle_verify_time: Seconds to wait after a threshold crossing
+                for the slot-empty runout verdict before pausing as a tangle
+                (default DEFAULT_TANGLE_VERIFY_TIME; 0 pauses immediately at
+                the threshold like the pre-verdict behavior, trading false
+                pauses on ACE1 runouts for the fastest possible tangle stop).
+            tangle_pump_time_hard: Continuous-pumping ceiling in seconds —
+                a fresh sample at/above it pauses immediately, bypassing
+                the verdict window (default DEFAULT_TANGLE_HARD_LIMIT,
+                clamped to TANGLE_HARD_LIMIT_FLOOR: starved pumping is
+                firmware-capped below the floor, so only a real blockage
+                can reach it).
         """
         self.printer = printer
         self.gcode = gcode
         self.reactor = reactor
         self.endless_spool = endless_spool
-        self.manager = manager  # Reference back to manager for sensor queries
+        self.manager = manager
 
-        # Debounce configuration
         self.runout_debounce_count = max(1, int(runout_debounce_count))
         self._runout_false_count = 0
 
-        # State tracking
         self.prev_toolhead_sensor_state = None
         self.last_printing_active = False
         self.last_print_state = "idle"
         self.monitor_debug_counter = 0
 
-        # Control flags
         self.runout_detection_active = False
         self.runout_handling_in_progress = False
-
-        # Timer handle
         self._monitoring_timer = None
 
-        # --- Tangle detection state ---
+        # Tangle detection (pump_time)
         self.tangle_detection_enabled = bool(tangle_detection)
-        self.tangle_detection_length = float(
-            tangle_detection_length if tangle_detection_length is not None
-            else self.DEFAULT_TANGLE_DETECTION_LENGTH
+        threshold = float(
+            tangle_pump_time if tangle_pump_time is not None
+            else self.DEFAULT_TANGLE_PUMP_TIME
         )
-        # Extruder position beyond which a tangle is declared
-        self._tangle_runout_pos = None
-        # Encoder pulse snapshot at the time the window was set
-        self._tangle_encoder_snapshot = None
-        # Klipper objects resolved at first use
-        self._extruder = None
-        self._estimated_print_time = None
+        if threshold < self.TANGLE_PUMP_TIME_FLOOR:
+            logging.warning(
+                "ACE: tangle_pump_time=%.1f below floor %.1f; clamping",
+                threshold, self.TANGLE_PUMP_TIME_FLOOR,
+            )
+            threshold = self.TANGLE_PUMP_TIME_FLOOR
+        self.tangle_pump_time = threshold
+        verify = float(
+            tangle_verify_time if tangle_verify_time is not None
+            else self.DEFAULT_TANGLE_VERIFY_TIME
+        )
+        self.tangle_verify_time = max(0.0, verify)
+        hard = float(
+            tangle_pump_time_hard if tangle_pump_time_hard is not None
+            else self.DEFAULT_TANGLE_HARD_LIMIT
+        )
+        if hard < self.TANGLE_HARD_LIMIT_FLOOR:
+            logging.warning(
+                "ACE: tangle_pump_time_hard=%.1f below floor %.1f "
+                "(ACE1's starved give-up reaches ~6s); clamping",
+                hard, self.TANGLE_HARD_LIMIT_FLOOR,
+            )
+            hard = self.TANGLE_HARD_LIMIT_FLOOR
+        self.tangle_pump_time_hard = hard
+        # pump_time state — see _check_tangle for semantics
+        self._pt_last_value_s = 0.0
+        self._pt_phase_armed = False
+        # Wall-clock (reactor) time the verdict window was armed, or None
+        self._pt_suspect_since = None
+        # One-shot latch for the empty-slot info message per depletion
+        self._pt_empty_notified = False
+        self._pt_unsupported_logged = False
+        # Last _is_tangle_detection_active() result seen by the monitor
+        # loop; used to clear stale phase state on an off→on edge (the
+        # dashboard pin can be flipped without going through
+        # set_tangle_detection_enabled).
+        self._tangle_was_active = False
+        # One-shot latch for the resume-without-filament net: warn+pause
+        # only once per dry resume, so a deliberate second resume proceeds.
+        self._resume_no_filament_warned = False
 
     def start_monitoring(self):
-        """Start runout detection monitor loop."""
+        """Start runout detection monitor loop; a no-op while it runs."""
+        if self._monitoring_timer is not None:
+            return
         self.gcode.respond_info("ACE: Starting runout detection monitor")
         self.set_detection_active(True)
         self._monitoring_timer = self.reactor.register_timer(
@@ -178,7 +243,7 @@ class RunoutMonitor:
                 raw_print_state = ""
 
         current_tool = self.manager.state.get("ace_current_index", -1)
-        current_sensor_state = self.manager.get_switch_state(SENSOR_TOOLHEAD)
+        current_sensor_state = self.manager.get_switch_state(SENSOR_RUNOUT)
 
         # Track state changes for logging
         old_printing_active = self.last_printing_active
@@ -188,6 +253,26 @@ class RunoutMonitor:
 
         if old_print_state != raw_print_state:
             self.gcode.respond_info(f"ACE: Print state changed: {old_print_state} → {raw_print_state}")
+            tool_map = getattr(self.manager, "tool_map", None)
+            if tool_map is not None:
+                try:
+                    if tool_map.on_print_state_change(old_print_state, raw_print_state):
+                        self.gcode.respond_info("ACE: Tool map cleared (print finished)")
+                except Exception as e:
+                    logging.warning(f"ACE: tool map clear failed: {e}")
+            # Resume safety net: re-verify feed assist on the loaded tool.
+            # An ACE power cycle or klippy restart while paused can silently
+            # lose feed assist — resuming then prints nothing (ACE2 clamps
+            # filament entirely when not feeding).
+            if (
+                old_print_state == "paused"
+                and raw_print_state == "printing"
+                and current_tool >= 0
+            ):
+                self._verify_feed_assist_on_resume(current_tool)
+                self._check_resume_without_filament(
+                    current_tool, current_sensor_state
+                )
 
         # Detect print start and force initialize
         print_just_started = (
@@ -266,7 +351,7 @@ class RunoutMonitor:
 
         # Early exit if detection disabled or toolchange in progress
         if not self.runout_detection_active or self.manager.toolchange_in_progress:
-            self._tangle_runout_pos = None
+            self._reset_tangle_phase()
             return eventtime + 0.2
 
         try:
@@ -283,7 +368,8 @@ class RunoutMonitor:
                 self.gcode.respond_info("ACE: Print stopped/cancelled - resetting monitor baseline")
                 self.prev_toolhead_sensor_state = None
                 self._runout_false_count = 0
-                self._tangle_runout_pos = None
+                self._reset_tangle_phase()
+                self._resume_no_filament_warned = False
                 self.runout_handling_in_progress = False
 
                 if not self.runout_detection_active:
@@ -303,7 +389,7 @@ class RunoutMonitor:
             if raw_print_state == "paused" or not is_printing:
                 self.prev_toolhead_sensor_state = None
                 self._runout_false_count = 0
-                self._tangle_runout_pos = None
+                self._reset_tangle_phase()
                 return eventtime + 0.2
 
             # Enhanced baseline initialization
@@ -357,7 +443,7 @@ class RunoutMonitor:
                     f"{self.runout_debounce_count} readings)"
                 )
 
-                self._handle_runout_detected(current_tool)
+                self._queue_event("runout", current_tool)
 
                 self.prev_toolhead_sensor_state = current_sensor_state
                 return eventtime + 0.2
@@ -367,8 +453,15 @@ class RunoutMonitor:
                 self._runout_false_count = 0
 
             # ===== TANGLE DETECTION (optional) =====
-            if self.tangle_detection_enabled and not self.runout_handling_in_progress:
-                self._check_tangle(eventtime, current_tool)
+            tangle_active = self._is_tangle_detection_active()
+            if tangle_active and not self._tangle_was_active:
+                # Re-enabled mid-print (possibly via the dashboard pin,
+                # which bypasses set_tangle_detection_enabled): clear
+                # stale phase state so the detector re-arms from scratch.
+                self._reset_tangle_phase()
+            self._tangle_was_active = tangle_active
+            if tangle_active and not self.runout_handling_in_progress:
+                self._check_tangle(current_tool, eventtime)
 
             # Update previous state for next cycle
             self.prev_toolhead_sensor_state = current_sensor_state
@@ -390,131 +483,378 @@ class RunoutMonitor:
             self.gcode.respond_info(f"ACE: Monitor error: {e}")
             return eventtime + 1.0
 
-    # ========== Tangle Detection ==========
+    def _check_resume_without_filament(self, tool_index, sensor_present):
+        """Pause a resume that has no filament at the toolhead.
 
-    def _resolve_extruder(self):
-        """Lazily look up the Klipper extruder and estimated_print_time.
-
-        Called once on the first tangle check.  Returns True on success.
+        Safety net for any path that resumes a print with a tool recorded
+        as loaded but nothing at the toolhead sensor (e.g. a failed tool
+        reload inside the RESUME macro that gets swallowed, letting
+        BASE_RESUME print into air — runout detection cannot catch this, it
+        needs a present→absent transition and the baseline is already
+        absent).  One-shot per dry resume: after the warning pause, a
+        deliberate second RESUME proceeds unhindered.
         """
-        if self._extruder is not None:
-            return True
+        if sensor_present:
+            self._resume_no_filament_warned = False
+            return
+        if self._resume_no_filament_warned:
+            return  # user chose to continue without filament
+        if getattr(self.manager, "toolchange_in_progress", False) is True:
+            return  # a toolchange is still loading; not a dry resume
+        self._resume_no_filament_warned = True
+        self._queue_event("dry_resume", tool_index)
+
+    def _queue_event(self, event, tool_index):
+        """From the monitor timer: the handling runs as a queued G-code
+        command (monitor_events), never inside the command running now."""
+        monitor_events.queue(self, event, tool_index)
+
+    def _handle_resume_without_filament(self, tool_index):
+        """The queued pause and dialog for a resume with no filament."""
+        self.gcode.respond_info(
+            f"ACE: Print resumed but NO filament at the toolhead sensor "
+            f"(tool T{tool_index} recorded as loaded) - pausing to protect "
+            f"the print"
+        )
         try:
-            self._extruder = self.printer.lookup_object("extruder")
-            mcu = self.printer.lookup_object("mcu")
-            self._estimated_print_time = mcu.estimated_print_time
-            return True
+            self._pause_for_runout()
+            self.gcode.run_script_from_command(
+                'RESPOND TYPE=command MSG="action:prompt_begin '
+                'Resumed Without Filament"'
+            )
+            self.gcode.run_script_from_command(
+                f'RESPOND TYPE=command MSG="action:prompt_text '
+                f'The print resumed but the toolhead sensor sees no '
+                f'filament for T{tool_index}. Retry the load, or resume '
+                f'again to continue anyway."'
+            )
+            self.gcode.run_script_from_command(
+                f'RESPOND TYPE=command MSG="action:prompt_button '
+                f'Retry T{tool_index}|T{tool_index}|primary"'
+            )
+            self.gcode.run_script_from_command(
+                'RESPOND TYPE=command MSG="action:prompt_footer_button '
+                'Resume anyway|RESUME|secondary"'
+            )
+            self.gcode.run_script_from_command(
+                'RESPOND TYPE=command MSG="action:prompt_footer_button '
+                'Cancel Print|CANCEL_PRINT|error"'
+            )
+            self.gcode.run_script_from_command(
+                'RESPOND TYPE=command MSG="action:prompt_show"'
+            )
         except Exception as e:
-            logging.warning("ACE: Tangle detection: cannot resolve extruder: %s", e)
+            self.gcode.respond_info(
+                f"ACE: Resume-without-filament handling error: {e}"
+            )
+
+    def _verify_feed_assist_on_resume(self, tool_index):
+        """Schedule the manager's feed assist verification off-timer.
+
+        verify_feed_assist_for_tool() blocks on wait_ready(); running it
+        inside this reactor timer callback would stall the monitor loop,
+        so hand it to a reactor callback greenlet instead.
+        """
+        verify = getattr(self.manager, "verify_feed_assist_for_tool", None)
+        if not callable(verify):
+            return
+        self.reactor.register_callback(lambda eventtime: verify(tool_index))
+
+    # ========== Tangle Detection (pump_time) ==========
+
+    def set_tangle_detection_enabled(self, enabled):
+        """Live toggle of tangle detection mid-print.
+
+        Clears in-flight phase tracking on toggle so a stale
+        cont_assist_time value cannot fire immediately on re-enable.
+        """
+        self.tangle_detection_enabled = bool(enabled)
+        self._reset_tangle_phase()
+
+    def _reset_tangle_phase(self):
+        """Clear all in-flight tangle tracking (arming, verdict window).
+
+        Called whenever monitoring context is lost — pause, print stop,
+        toolchange, detection toggle — so no stale sample or half-elapsed
+        verdict window survives into the next monitored stretch.
+        """
+        self._pt_phase_armed = False
+        self._pt_last_value_s = 0.0
+        self._pt_suspect_since = None
+        self._pt_empty_notified = False
+
+    def _is_tangle_detection_active(self):
+        """True when the detector should run this cycle.
+
+        [output_pin TANGLE_DETECTION] is authoritative when configured —
+        the slider IS the runtime control, so command and slider stay
+        consistent regardless of which side toggles.  Without the pin,
+        the python flag (tangle_detection config / ACE_TANGLE_DETECTION
+        command) is the source of truth.
+        """
+        try:
+            pin = self.printer.lookup_object(
+                "output_pin TANGLE_DETECTION", None
+            )
+        except Exception:
+            pin = None
+        if pin is not None:
+            try:
+                value = pin.get_status(
+                    self.reactor.monotonic()
+                ).get("value", 1)
+                return bool(int(round(float(value))))
+            except Exception:
+                pass  # read failure → fall through to flag
+        return self.tangle_detection_enabled
+
+    def _check_tangle(self, current_tool, eventtime=None):
+        """Watch cont_assist_time and classify sustained pumping.
+
+        Called from the monitor loop only while actively printing —
+        the dispatcher gates on is_printing, toolchange_in_progress,
+        and runout_handling_in_progress.  Noops further unless some
+        instance is actively pumping (feed assist enabled).  Covers
+        ACE1 and ACE2: ACE2's device-native gear_err detection only
+        fires on commanded feeds, never during feed assist (verified
+        on hardware), so pump-time monitoring is needed there too.
+
+        Detection: tracks monotonic growth of cont_assist_time.  The
+        first growing reading only arms the phase, a value drop disarms
+        it, and a growing value at or above the threshold while armed
+        crosses into the verdict stage.  Crossing requires two
+        *distinct* growing samples: the monitor ticks every 50 ms but
+        the heartbeat refreshes cont_assist_time at only 1 Hz, so an
+        unchanged value is a re-read of the same sample — a single
+        stale sample (e.g. right after re-enabling detection) cannot
+        trigger.  The duration itself is the device-reported
+        cont_assist_time — no local elapsed-time tracking.
+
+        Verdict: sustained pumping means EITHER a tangle (can't push)
+        OR the spool ran out at the ACE (nothing left to push) — the
+        slot presence state disambiguates (see module docstring for
+        the per-generation hardware timing):
+        - Assist slot already reported empty → runout in transit:
+          suppress entirely while it stays empty (covers ACE2, whose
+          empty report precedes the pumping anomaly by ~100 s, and the
+          minutes-long tail transit on both generations).
+        - Threshold crossed with the slot non-empty: on ACE2 that IS a
+          tangle (its slot state is sensor-live — a runout reports empty
+          long before its starved pumping starts): pause immediately.
+          On ACE1 (lagging slot state machine) arm a verdict window of
+          tangle_verify_time seconds instead of pausing (0 = pause
+          immediately).  Slot goes empty within it → runout, no pause.
+          A fresh sample at/above tangle_pump_time_hard → tangle, pause
+          now (starved pumping is firmware-capped below it).  Window
+          expires with the slot still non-empty → tangle, pause.
+          Counter DROPS during the window are ignored: ACE1's give-up
+          unwind and ACE2's starved retry cycle both reset the counter
+          mid-runout, and real-tangle ramps can dip — a drop proves
+          nothing either way.
+        """
+        if eventtime is None:
+            eventtime = self.reactor.monotonic()
+
+        inst = self._get_active_assist_instance(current_tool)
+        if inst is None:
+            self._pt_phase_armed = False
+            self._pt_suspect_since = None
+            return
+
+        # Runout gate / runout verdict: the device reports the pumping
+        # slot as empty — sustained pumping is starvation, not a tangle.
+        if self._assist_slot_empty(inst):
+            if self._pt_suspect_since is not None:
+                self.gcode.respond_info(
+                    f"ACE: Not a tangle — T{current_tool} spool ran out at "
+                    f"the ACE (slot empty). Print continues on the remaining "
+                    f"filament; runout handling engages at the toolhead sensor."
+                )
+            elif not self._pt_empty_notified:
+                self.gcode.respond_info(
+                    f"ACE: T{current_tool} spool ran out at the ACE (slot "
+                    f"empty) — tangle detection suspended while the remaining "
+                    f"filament prints out."
+                )
+            self._pt_empty_notified = True
+            self._pt_phase_armed = False
+            self._pt_last_value_s = 0.0
+            self._pt_suspect_since = None
+            return
+        self._pt_empty_notified = False
+
+        info = getattr(inst, "_info", None) or {}
+        val = info.get("cont_assist_time") if isinstance(info, dict) else None
+        if val is None:
+            if not self._pt_unsupported_logged:
+                self._pt_unsupported_logged = True
+                logging.info(
+                    "ACE: tangle detection requested but firmware does not "
+                    "report cont_assist_time — detector disabled"
+                )
+            return
+        current = float(val)
+
+        prev = self._pt_last_value_s
+        self._pt_last_value_s = current
+
+        # Verdict window armed: the slot-empty gate above, the hard
+        # ceiling, or expiry may end it — counter DROPS prove nothing here
+        # (ACE1's give-up unwind and ACE2's retry cycle both reset the
+        # counter mid-runout).
+        if self._pt_suspect_since is not None:
+            # Hard ceiling: starved pumping is firmware-capped well below
+            # this (ACE1 give-up ~5-6 s, ACE2 retry cap ~3.9 s), so a fresh
+            # growing sample at/above it proves filament is present and
+            # blocked — pause now instead of waiting out the window.
+            if current > prev and current >= self.tangle_pump_time_hard:
+                self._fire_tangle(current_tool, current)
+                return
+            if eventtime - self._pt_suspect_since >= self.tangle_verify_time:
+                self._fire_tangle(current_tool, current)
+            return
+
+        # Cycle ended or idle: reset phase
+        if current < prev or current <= 0.0:
+            self._pt_phase_armed = False
+            return
+
+        # Unchanged value = re-read of the same heartbeat sample —
+        # no new information, keep the armed state but never fire.
+        if current == prev:
+            return
+
+        # First fresh growing sample: arm the phase, wait for the next
+        if not self._pt_phase_armed:
+            self._pt_phase_armed = True
+            return
+
+        # Threshold crossed → verdict stage (or straight to pause when
+        # the verify window is disabled)
+        if current >= self.tangle_pump_time:
+            if self.tangle_verify_time <= 0.0:
+                self._fire_tangle(current_tool, current)
+                return
+            # Already at/above the hard ceiling on the crossing sample
+            # (e.g. detection re-enabled mid-tangle): no verdict needed.
+            if current >= self.tangle_pump_time_hard:
+                self._fire_tangle(current_tool, current)
+                return
+            # ACE2's slot state is sensor-live: a runout reports 'empty'
+            # ~100 s BEFORE its starved pumping even starts, and that
+            # pumping self-caps below the threshold (~3.9 s) — so on ACE2 a
+            # crossing with a non-empty slot (the gate above already
+            # returned for empty) IS a tangle.  No verdict window needed;
+            # pause ~10 s sooner.  ACE1 keeps reporting 'ready' until ~4 s
+            # after the crossing and must wait for the slot verdict.
+            if self._slot_state_is_sensor_live(inst):
+                self._fire_tangle(current_tool, current)
+                return
+            self._pt_suspect_since = eventtime
+            self.gcode.respond_info(
+                f"ACE: Possible tangle on T{current_tool} (ACE pumping "
+                f"{current:.1f}s) — verifying for up to "
+                f"{self.tangle_verify_time:.0f}s. A spool runout reports the "
+                f"slot empty and resumes silently; a real tangle will pause."
+            )
+
+    def _slot_state_is_sensor_live(self, inst):
+        """True when the instance reports slot presence live (ACE2-family).
+
+        ACE2 firmware flips the slot to 'empty' the moment its presence
+        sensor clears; ACE1's slot state is a lagging state machine.
+        feed_assist_causes_busy() doubles as the generation marker.
+        Strict `is True` so mocks and read failures fall back to the
+        windowed (ACE1) verdict path.
+        """
+        try:
+            return inst.protocol.feed_assist_causes_busy() is True
+        except Exception:
             return False
 
-    def _get_extruder_pos(self, eventtime):
-        """Return extruder stepper position in mm at *eventtime*."""
-        print_time = self._estimated_print_time(eventtime)
-        return self._extruder.find_past_position(print_time)
-
-    def _reset_tangle_window(self, eventtime):
-        """Reset the tangle detection window.
-
-        Snapshots the current extruder position and encoder pulse count
-        so the next check starts fresh.
-        """
-        if not self._resolve_extruder():
-            self._tangle_runout_pos = None
-            return
-        encoder_pulse = self.manager.get_rdm_encoder_pulse()
-        if encoder_pulse is None:
-            self._tangle_runout_pos = None
-            return
-        extruder_pos = self._get_extruder_pos(eventtime)
-        self._tangle_runout_pos = extruder_pos + self.tangle_detection_length
-        self._tangle_encoder_snapshot = encoder_pulse
-
-    def _check_tangle(self, eventtime, current_tool):
-        """Check for spool tangle condition.
-
-        Tangle is declared when ALL of the following are true:
-            1. Print state is "printing" (already guaranteed by caller)
-            2. ACE feed-assist is active
-            3. RDM detect pin shows filament present
-            4. Nozzle sensor shows filament present
-            5. Extruder moved >= TANGLE_DETECTION_LENGTH since last reset
-            6. RDM encoder pulse count has NOT changed since last reset
-
-        When any condition fails, the detection window is reset so we
-        never accumulate stale state.
-
-        Args:
-            eventtime: Current reactor eventtime.
-            current_tool: Global tool index being printed.
-        """
-        # Condition 2: feed-assist must be active
-        if not self.manager.is_feed_assist_active():
-            self._tangle_runout_pos = None
-            return
-
-        # Condition 3: RDM sensor shows filament present
-        if not self.manager.get_switch_state(SENSOR_RDM):
-            self._tangle_runout_pos = None
-            return
-
-        # Condition 4: Nozzle sensor shows filament present
-        if not self.manager.get_switch_state(SENSOR_TOOLHEAD):
-            self._tangle_runout_pos = None
-            return
-
-        # Get current encoder pulse count from RDM tracker
-        current_encoder = self.manager.get_rdm_encoder_pulse()
-        if current_encoder is None:
-            # RDM is not a filament_tracker — cannot do tangle detection
-            return
-
-        # Initialize window if not set
-        if self._tangle_runout_pos is None:
-            self._reset_tangle_window(eventtime)
-            return
-
-        # Condition 6: If encoder has moved, filament is flowing — reset window
-        if current_encoder != self._tangle_encoder_snapshot:
-            self._reset_tangle_window(eventtime)
-            return
-
-        # Condition 5: Check extruder position
-        if not self._resolve_extruder():
-            return
-        extruder_pos = self._get_extruder_pos(eventtime)
-        if extruder_pos < self._tangle_runout_pos:
-            # Extruder hasn't moved far enough yet — no tangle
-            return
-
-        # ===== ALL 6 CONDITIONS MET — TANGLE DETECTED =====
+    def _fire_tangle(self, current_tool, current):
+        """Confirmed tangle: log, wipe phase state, pause + prompt."""
         logging.warning(
-            "ACE: TANGLE DETECTED on T%d — extruder at %.1f mm "
-            "(window was %.1f mm), encoder stuck at %d pulses",
-            current_tool, extruder_pos,
-            self._tangle_runout_pos - self.tangle_detection_length,
-            current_encoder,
+            "ACE: TANGLE DETECTED on T%d — cont_assist_time=%.1fs "
+            "(threshold %.1fs, hard limit %.1fs, verify window %.0fs) "
+            "with the slot never reporting empty",
+            current_tool, current, self.tangle_pump_time,
+            self.tangle_pump_time_hard, self.tangle_verify_time,
         )
-        self._handle_tangle_detected(current_tool)
+        self._reset_tangle_phase()
+        self._queue_event("tangle", current_tool)
+
+    def _assist_slot_empty(self, inst):
+        """True when the device reports the pumping slot as empty.
+
+        Fail-closed to False (= keep tangle detection active): degraded
+        or missing slot status must never mute the detector, only a
+        positive device-side "empty" may.
+        """
+        try:
+            slot = getattr(inst, "_feed_assist_index", -1)
+            if slot is None or slot < 0:
+                return False
+            return inst._is_slot_empty(slot) is True
+        except Exception:
+            return False
+
+    def _get_active_assist_instance(self, current_tool=-1):
+        """Return the instance whose feed assist should be monitored.
+
+        With a loaded tool, ONLY that tool's instance qualifies, and only
+        while its assist is on that tool's slot — under the single-assist
+        invariant any other instance's assist is stale state, and
+        monitoring it points the detector (and its empty-slot gate) at the
+        wrong hardware: a stale assist index left on the outgoing ACE by an
+        endless-spool swap would make a first-match scan monitor that
+        instance, whose empty slot then suppresses detection and blinds it
+        to a tangle on the loaded tool's instance.  Without a resolvable
+        tool (no print, tool outside the configured instances) fall back to
+        the first pumping instance.
+
+        Both generations are monitored: ACE2's native gear_err detection
+        only covers commanded feeds — during feed assist it pumps against
+        a tangle indefinitely, same as ACE1.  Each protocol decoder
+        normalizes cont_assist_time to seconds.
+        """
+        try:
+            instances = getattr(self.manager, "instances", None) or []
+            if current_tool is not None and current_tool >= 0:
+                # Pure arithmetic on purpose: get_instance_from_tool()
+                # validates against the global ACE_INSTANCES registry and
+                # returns -1 when it is inconsistent — which would silently
+                # fall through to the first-match scan below, i.e. exactly
+                # the wrong-instance behavior this resolution exists to
+                # prevent.  manager.instances is the authority here.
+                inst_num, slot = divmod(current_tool - get_tool_base(),
+                                        SLOTS_PER_ACE)
+                if 0 <= inst_num < len(instances):
+                    inst = instances[inst_num]
+                    if getattr(inst, "_feed_assist_index", -1) == slot:
+                        return inst
+                    # Assist not on the loaded tool's slot: nothing valid
+                    # to monitor — never fall back to another instance's
+                    # (stale) assist.
+                    return None
+            for inst in instances:
+                if getattr(inst, "_feed_assist_index", -1) < 0:
+                    continue
+                return inst
+        except Exception:
+            pass
+        return None
 
     def _handle_tangle_detected(self, tool_index):
-        """Handle a confirmed spool tangle.
-
-        Pauses the print and shows a Mainsail prompt informing the user
-        that a tangle was detected.  Resets the tangle window so that
-        after the user resolves the tangle and resumes, detection starts
-        fresh.
-
-        Args:
-            tool_index: Global tool index where the tangle was detected.
-        """
+        """Pause the print and prompt the user to clear the tangle."""
         self.runout_handling_in_progress = True
-        self._tangle_runout_pos = None
+        self._reset_tangle_phase()
 
         try:
             self.gcode.respond_info(
                 f"ACE: Spool tangle detected on T{tool_index}! "
-                f"Filament stuck between spool and RDM. Pausing print."
+                f"ACE pumping continuously without delivering filament. "
+                f"Pausing print."
             )
             self._pause_for_runout()
 
@@ -525,13 +865,15 @@ class RunoutMonitor:
             self.gcode.run_script_from_command(
                 f'RESPOND TYPE=command MSG="action:prompt_text '
                 f'Spool tangle detected on T{tool_index}! '
-                f'The extruder is consuming the tube buffer but no filament '
-                f'is passing through the RDM encoder. '
-                f'Check the spool for tangles, then resume."'
+                f'ACE can\'t push filament. Check the spool, then resume."'
             )
             self.gcode.run_script_from_command(
                 'RESPOND TYPE=command MSG="action:prompt_footer_button '
                 'Resume|RESUME|primary"'
+            )
+            self.gcode.run_script_from_command(
+                'RESPOND TYPE=command MSG="action:prompt_footer_button '
+                'Disable Det. & Resume|_ACE_TANGLE_DISABLE_AND_RESUME|secondary"'
             )
             self.gcode.run_script_from_command(
                 'RESPOND TYPE=command MSG="action:prompt_footer_button '
@@ -623,6 +965,47 @@ class RunoutMonitor:
             # Step 1: PAUSE immediately
             self._pause_for_runout()
 
+            # Step 2: the runout tool's assist is useless now (the tail is
+            # past the toolhead, nothing left to push) and actively harmful
+            # on ACE2, where a surviving assist keeps the device
+            # busy-by-design and deadlocks the wait_ready of any subsequent
+            # reload.
+            try:
+                disable = getattr(
+                    self.manager, "disable_feed_assist_for_tool", None
+                )
+                if callable(disable):
+                    disable(tool_index, "runout confirmed at toolhead sensor")
+            except Exception as e:
+                self.gcode.respond_info(
+                    f"ACE: Warning - could not disable assist after "
+                    f"runout: {e}"
+                )
+
+            # Step 2b, with an intake transfer: the runout was seen at the
+            # intake while the gear still holds the old piece, which keeps
+            # the toolhead sensor behind the gear covered - Retry and
+            # endless spool would find the tool still loaded. Cut it and
+            # pull it back off the sensor. A slot that still reads
+            # filament is a break or a jam, not a runout.
+            swap_allowed = True
+            if self.manager.has_intake_transfer(tool_index) is True:
+                if self.manager.slot_reads_empty(tool_index) is not True:
+                    swap_allowed = False
+                    self.gcode.respond_info(
+                        f"ACE: T{tool_index} stopped at the toolhead while its"
+                        f" ACE slot still has filament - broken, tangled or"
+                        f" stuck. No endless spool: free it, then Retry"
+                        f" T{tool_index}.")
+                try:
+                    self.manager.park_after_runout(tool_index)
+                except Exception as e:
+                    swap_allowed = False
+                    self.gcode.respond_info(
+                        f"ACE: Pulling T{tool_index}'s old filament back"
+                        f" failed ({e}) - no endless spool; unload it by"
+                        f" hand, then Retry T{tool_index}.")
+
             # Get runout details for prompt
             instance_num = get_instance_from_tool(tool_index)
             material = "unknown"
@@ -646,6 +1029,9 @@ class RunoutMonitor:
 
             # Step 4: Check if endless spool is enabled
             endless_spool_enabled = self.manager.state.get("ace_endless_spool_enabled", False)
+
+            if not swap_allowed:
+                return
 
             if not endless_spool_enabled:
                 self.gcode.respond_info(
