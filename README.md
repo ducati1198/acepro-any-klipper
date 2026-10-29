@@ -11,7 +11,7 @@ Tuned and tested on a **Creality K1 Max** (Raspberry Pi 5, Kalico, Fluidd, Klipp
 [![Fluidd](https://img.shields.io/badge/Fluidd-1.37.7%20panel-orange.svg)](fluidd/)
 [![OrcaSlicer](https://img.shields.io/badge/OrcaSlicer-2.5%20plugin-purple.svg)](orca_plugin/)
 
-<img src="orca_plugin/panel-preview.png" alt="ACE Spools panel in OrcaSlicer" width="70%">
+<img src="docs/img/fluidd-ace-card-mapped.png" alt="ACE Pro card in Fluidd" width="60%">
 
 </div>
 
@@ -56,6 +56,11 @@ Tuned and tested on a **Creality K1 Max** (Raspberry Pi 5, Kalico, Fluidd, Klipp
 | **RFID sync** | Reads material, colour and temperature from the ACE tags. |
 | **Safety** | Connection supervision, runout and tangle handling, recovery after a failed load. |
 
+<div align="center">
+<img src="docs/img/fluidd-ace-card.png" alt="Fluidd ACE Pro card with two units" width="60%"><br>
+<em>The ACE Pro card on the Fluidd dashboard (demo data).</em>
+</div>
+
 ---
 
 ## 2. My setup
@@ -74,6 +79,10 @@ This is the machine the configs in [`config/`](config/) are written for. If your
 | Cutter | Mechanical cutter block at the back-left, pushed by the toolhead moving along X |
 | Poop basket | EZMAX ES3004 servo on `PB14` |
 | Slicer | OrcaSlicer 2.5 on macOS |
+
+<div align="center">
+<img src="docs/img/hardware.svg" alt="Hardware overview" width="90%">
+</div>
 
 Important positions in `acepro_macros.cfg`:
 
@@ -239,6 +248,10 @@ Also check:
 
 The plugin lets you choose the physical spool for each sliced filament inside Orca. Full guide: [`orca_plugin/INSTALL.md`](orca_plugin/INSTALL.md).
 
+<div align="center">
+<img src="orca_plugin/panel-preview.png" alt="ACE Spools panel in OrcaSlicer" width="70%">
+</div>
+
 1. In OrcaSlicer 2.5 or newer open **File → Plugins**.
 2. **Browse plugins → Install local plugin** and pick `orca_plugin/ace_spool_mapper.py`.
 3. Click **Yes** when Orca asks whether the plugin may connect to your printer.
@@ -251,6 +264,10 @@ Each project filament shows its best match (**Auto →**: same material, closest
 ---
 
 ## 6. Choose spools at print start
+
+<div align="center">
+<img src="docs/img/spool-mapping-flow.svg" alt="How the spool mapping works" width="90%">
+</div>
 
 Print a file with any loaded spools, without re-slicing. The G-code's `T0`, `T1`… are mapped to physical ACE slots **for that one print**.
 
@@ -277,6 +294,12 @@ Three ways to set it, in order of convenience:
 | **Console** | `ACE_SET_TOOL_MAP` by hand. |
 
 A choice made later in Fluidd wins over the one from Orca (`KEEP_EXISTING=1`).
+
+<div align="center">
+<img src="docs/img/fluidd-choose-spools.png" alt="Choose ACE spools window in Fluidd" width="48%">
+<img src="docs/img/fluidd-ace-card-mapped.png" alt="Fluidd card showing the active map" width="48%"><br>
+<em>Left: the window that opens on Print. Right: the card shows the active map (Spools: T1→T3, T2→T4).</em>
+</div>
 
 Example line that Orca inserts before the start G-code:
 
@@ -357,6 +380,10 @@ On a 1024×600 screen, use `font_size = small` (the installer sets it). If a lay
 ---
 
 ## 9. Calibrate the filament cutter
+
+<div align="center">
+<img src="docs/img/cutter-positions.svg" alt="Cutter positions along X" width="90%">
+</div>
 
 If the toolhead pushes the cutter lever too far, the X belt can skip teeth. `cut_full_x` is the position where the blade is closed. Going past it is what hurts the belt.
 
@@ -530,6 +557,7 @@ acepro-any-klipper/
 ├── slicer/                       Orca helper scripts
 ├── tools/ace_console.py          Serial console for debugging
 ├── tests/                        Test suite
+├── docs/img/                     Screenshots and diagrams used in this README
 └── img/                          Upstream screenshots (not used in this README)
 ```
 
