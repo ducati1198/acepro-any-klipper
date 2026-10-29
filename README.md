@@ -124,7 +124,7 @@ After installation, adjust the variables in the provided files to match your pri
 All settings are commented. Key items to change:
 
 - **Poop position**: `variable_poop_x`, `variable_poop_y` in `_ACE_VARS`
-- **Cutter block**: `cut_block_x/y`, `cut_engage_x/y`, `cut_full_x/y`
+- **Cutter block**: `cut_block_x/y`, `cut_engage_x/y`, `cut_full_x/y`. To find where the cut finishes, add `[include cut_calibrate.cfg]` and run `CUT_CAL_START`, then `CUT_CAL_STEP` until the lever is fully pressed (`CUT_CAL_END` to back off). Set `cut_full_x` there: pushing past it can make the belt skip teeth.
 - **Wipe start**: `wipe_start_x`, `wipe_start_y`
 - **Servo pins and angles** (if different)
 
