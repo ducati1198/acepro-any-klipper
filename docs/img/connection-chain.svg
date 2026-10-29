@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 250" font-family="Helvetica,Arial,sans-serif" font-size="14">
+<rect width="900" height="250" rx="14" fill="#f4f6fa" stroke="#c9d1de"/>
+<text x="450" y="30" text-anchor="middle" font-size="18" font-weight="bold" fill="#1d2a44">From the ACE Pro to a USB port</text>
+<defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8z" fill="#44546f"/></marker></defs>
+<g stroke="#44546f" stroke-width="3" fill="none" marker-end="url(#a)"><path d="M180,110 L250,110"/><path d="M430,110 L500,110"/><path d="M680,110 L730,110"/></g>
+<rect x="20" y="70" width="160" height="80" rx="10" fill="#e2f5e6" stroke="#4aa361"/><text x="100" y="100" text-anchor="middle" font-weight="bold">ACE Pro unit</text><text x="100" y="120" text-anchor="middle" font-size="12">6-pin socket on the back</text><text x="100" y="136" text-anchor="middle" font-size="12">own power supply</text>
+<rect x="250" y="70" width="180" height="80" rx="10" fill="#fff3d6" stroke="#d9a93a"/><text x="340" y="100" text-anchor="middle" font-weight="bold">Original cable</text><text x="340" y="120" text-anchor="middle" font-size="12">6-pin plug to 4-pin plug</text><text x="340" y="136" text-anchor="middle" font-size="12">(Variant A keeps it)</text>
+<rect x="500" y="70" width="180" height="80" rx="10" fill="#ece6fa" stroke="#8a6fd0"/><text x="590" y="100" text-anchor="middle" font-weight="bold">Adapter</text><text x="590" y="120" text-anchor="middle" font-size="12">D+, D-, GND only</text><text x="590" y="136" text-anchor="middle" font-size="12">no 5 V wire</text>
+<rect x="730" y="70" width="150" height="80" rx="10" fill="#dbe7ff" stroke="#6b8cd8"/><text x="805" y="100" text-anchor="middle" font-weight="bold">USB-A</text><text x="805" y="120" text-anchor="middle" font-size="12">Pi, USB HAT or</text><text x="805" y="136" text-anchor="middle" font-size="12">powered hub</text>
+<text x="450" y="195" text-anchor="middle" fill="#44546f" font-size="13">Variant B skips the original cable: a 6-pin plug with the same three wires goes straight into the ACE.</text>
+<text x="450" y="220" text-anchor="middle" fill="#c0392b" font-size="13" font-weight="bold">Never connect VBUS / 5 V. The ACE is powered by its own supply.</text>
+</svg>

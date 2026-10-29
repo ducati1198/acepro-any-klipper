@@ -80,6 +80,18 @@ This is the machine the configs in [`config/`](config/) are written for. If your
 | Poop basket | EZMAX ES3004 servo on `PB14` |
 | Slicer | OrcaSlicer 2.5 on macOS |
 
+### What you need to buy or build
+
+- 1 to 3 **ACE Pro** units, each with a USB-A adapter (D+, D- and GND only, **never 5 V**).
+- A **toolhead filament sensor** (required) and an **RDM / splitter sensor** (optional).
+- A **filament cutter** (recommended) and, optionally, a servo poop basket.
+
+Which ACE generation, the adapter wiring, the connector pinouts and a multimeter check are in **[docs/HARDWARE.md](docs/HARDWARE.md)**.
+
+<div align="center">
+<img src="docs/img/connection-chain.svg" alt="From the ACE Pro to a USB port" width="90%">
+</div>
+
 <div align="center">
 <img src="docs/img/hardware.svg" alt="Hardware overview" width="90%">
 </div>
@@ -562,6 +574,7 @@ acepro-any-klipper/
 ├── slicer/                       Orca helper scripts
 ├── tools/ace_console.py          Serial console for debugging
 ├── tests/                        Test suite
+├── docs/HARDWARE.md              Parts, ACE USB adapter wiring, pinouts
 ├── docs/img/                     Screenshots and diagrams used in this README
 └── img/                          Upstream screenshots (not used in this README)
 ```

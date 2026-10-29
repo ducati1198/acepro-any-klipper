@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 330" font-family="Helvetica,Arial,sans-serif" font-size="14">
+<rect width="900" height="330" rx="14" fill="#f4f6fa" stroke="#c9d1de"/>
+<text x="450" y="30" text-anchor="middle" font-size="18" font-weight="bold" fill="#1d2a44">Connector faces (looking into the connector, latch tab on top)</text>
+<g text-anchor="middle">
+<text x="165" y="62" font-weight="bold">4-pin plug (original cable)</text>
+<rect x="125" y="72" width="40" height="12" fill="#9aa6bd"/><rect x="165" y="72" width="0" height="12"/>
+<rect x="90" y="84" width="150" height="110" rx="6" fill="#fff" stroke="#44546f" stroke-width="2"/>
+<line x1="165" y1="84" x2="165" y2="194" stroke="#9aa6bd"/><line x1="90" y1="139" x2="240" y2="139" stroke="#9aa6bd"/>
+<text x="127" y="118" font-weight="bold">D-</text><text x="202" y="118" font-weight="bold">D+</text>
+<text x="127" y="173" fill="#c0392b" font-weight="bold">NC</text><text x="202" y="173" font-weight="bold">GND</text>
+<text x="165" y="215" font-size="12" fill="#44546f">goes to the printer in the stock setup</text>
+
+<text x="450" y="62" font-weight="bold">4-pin socket (your adapter, Variant A)</text>
+<rect x="410" y="72" width="40" height="12" fill="#9aa6bd"/>
+<rect x="375" y="84" width="150" height="110" rx="6" fill="#fff" stroke="#44546f" stroke-width="2"/>
+<line x1="450" y1="84" x2="450" y2="194" stroke="#9aa6bd"/><line x1="375" y1="139" x2="525" y2="139" stroke="#9aa6bd"/>
+<text x="412" y="118" font-weight="bold">D+</text><text x="487" y="118" font-weight="bold">D-</text>
+<text x="412" y="173" font-weight="bold">GND</text><text x="487" y="173" fill="#c0392b" font-weight="bold">NC</text>
+<text x="450" y="215" font-size="12" fill="#44546f">the mirror image of the plug</text>
+
+<text x="735" y="62" font-weight="bold">6-pin plug (Variant B)</text>
+<rect x="680" y="72" width="40" height="12" fill="#9aa6bd"/>
+<rect x="630" y="84" width="210" height="110" rx="6" fill="#fff" stroke="#44546f" stroke-width="2"/>
+<line x1="700" y1="84" x2="700" y2="194" stroke="#9aa6bd"/><line x1="770" y1="84" x2="770" y2="194" stroke="#9aa6bd"/><line x1="630" y1="139" x2="840" y2="139" stroke="#9aa6bd"/>
+<text x="665" y="118" font-weight="bold">D-</text><text x="735" y="118" font-weight="bold">D+</text><text x="805" y="118" fill="#8a96ad">unused</text>
+<text x="665" y="173" fill="#c0392b" font-weight="bold">NC</text><text x="735" y="173" font-weight="bold">GND</text><text x="805" y="173" fill="#8a96ad">unused</text>
+<text x="735" y="215" font-size="12" fill="#44546f">goes into the ACE's 6-pin socket</text>
+</g>
+<text x="450" y="262" text-anchor="middle" fill="#c0392b" font-weight="bold">NC = not connected. Leave that position empty on both sides.</text>
+<text x="450" y="288" text-anchor="middle" fill="#44546f" font-size="13">Always identify pins by their position in these faces, never by wire colour. Check with a multimeter before plugging in.</text>
+</svg>
