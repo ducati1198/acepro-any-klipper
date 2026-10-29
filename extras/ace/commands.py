@@ -9,6 +9,7 @@ import json
 import os
 import traceback
 import logging
+import re
 
 from . import ace2_ota
 from . import connection_pause
@@ -2632,6 +2633,73 @@ def cmd_ACE_GET_TOOL_MAP(gcmd):
     gcmd.respond_info(ace_get_manager(0).tool_map.describe())
 
 
+def _parse_tool_list(text):
+    tools = []
+    for part in re.split(r"[,\s]+", (text or "").upper().replace("T", "")):
+        if part == "":
+            continue
+        tools.append(int(part))
+    return tools
+
+
+def cmd_ACE_SET_ENDLESS_CHAIN(gcmd):
+    """Endless spool takeover order for one tool. TOOL=<n> NEXT=4,5 (empty NEXT removes it)."""
+    try:
+        manager = ace_get_manager(0)
+        tool = gcmd.get_int("TOOL", minval=0)
+        nxt = _parse_tool_list(gcmd.get("NEXT", ""))
+        stored = manager.endless_spool.set_chain(tool, nxt)
+        if stored:
+            gcmd.respond_info(
+                f"ACE: Endless spool chain T{tool} -> " + ", ".join(f"T{t}" for t in stored))
+        else:
+            gcmd.respond_info(f"ACE: Endless spool chain for T{tool} removed (match mode applies)")
+    except Exception as e:
+        gcmd.respond_info(f"ACE_SET_ENDLESS_CHAIN error: {e}")
+
+
+def cmd_ACE_CLEAR_ENDLESS_CHAIN(gcmd):
+    """Remove all endless spool chains, or one with TOOL=<n>."""
+    try:
+        manager = ace_get_manager(0)
+        tool = gcmd.get_int("TOOL", None, minval=0)
+        manager.endless_spool.clear_chains(tool)
+        gcmd.respond_info("ACE: Endless spool chains cleared" if tool is None
+                          else f"ACE: Endless spool chain for T{tool} removed")
+    except Exception as e:
+        gcmd.respond_info(f"ACE_CLEAR_ENDLESS_CHAIN error: {e}")
+
+
+def cmd_ACE_GET_ENDLESS_CHAIN(gcmd):
+    """Show the endless spool chains."""
+    manager = ace_get_manager(0)
+    chains = manager.endless_spool.get_chains()
+    if not chains:
+        gcmd.respond_info("ACE: No endless spool chains (match mode applies)")
+        return
+    for tool, nxt in sorted(chains.items()):
+        gcmd.respond_info(f"ACE: T{tool} -> " + ", ".join(f"T{t}" for t in nxt))
+
+
+def cmd_ACE_COUNT_CUT(gcmd):
+    """Count one filament cut (called by CUT_TIP) for the maintenance counters."""
+    ace_get_manager(0).record_stat("cuts", 1)
+
+
+def cmd_ACE_RESET_STATS(gcmd):
+    """Reset the usage counters (cuts, tool changes, purge). [WHAT=cuts|tool_changes|purge_mm]"""
+    manager = ace_get_manager(0)
+    what = (gcmd.get("WHAT", "") or "").lower()
+    names = [what] if what else list(manager.STAT_NAMES)
+    for name in names:
+        if name not in manager.STAT_NAMES:
+            gcmd.respond_info(f"ACE: Unknown counter '{name}'. Use one of: {', '.join(manager.STAT_NAMES)}")
+            return
+    for name in names:
+        manager.state.set_and_save(f"ace_stat_{name}", 0)
+    gcmd.respond_info("ACE: Counters reset: " + ", ".join(names))
+
+
 ACE_COMMANDS = [
     ("ACE_GET_STATUS", cmd_ACE_GET_STATUS, "Query ACE status. [INSTANCE=] (omit for all), VERBOSE=1 for detailed output"),
     ("ACE_GET_CONNECTION_STATUS", cmd_ACE_GET_CONNECTION_STATUS,
@@ -2685,6 +2753,12 @@ ACE_COMMANDS = [
     ("ACE_RFID_SYNC_STATUS", cmd_ACE_RFID_SYNC_STATUS, "Query RFID sync status. [INSTANCE=]"),
     ("ACE_DEBUG_INJECT_SENSOR_STATE", cmd_ACE_DEBUG_INJECT_SENSOR_STATE,
      "Inject sensor state for testing. TOOLHEAD=0/1 RDM=0/1 or RESET=1"),
+    ("ACE_SET_ENDLESS_CHAIN", cmd_ACE_SET_ENDLESS_CHAIN,
+     "Endless spool takeover order: TOOL=<n> NEXT=<t>,<t> (empty NEXT removes it)"),
+    ("ACE_CLEAR_ENDLESS_CHAIN", cmd_ACE_CLEAR_ENDLESS_CHAIN, "Remove all endless spool chains, or one: TOOL=<n>"),
+    ("ACE_GET_ENDLESS_CHAIN", cmd_ACE_GET_ENDLESS_CHAIN, "Show the endless spool chains"),
+    ("ACE_COUNT_CUT", cmd_ACE_COUNT_CUT, "Count one filament cut (used by CUT_TIP)"),
+    ("ACE_RESET_STATS", cmd_ACE_RESET_STATS, "Reset usage counters [WHAT=cuts|tool_changes|purge_mm]"),
     ("ACE_SET_ENDLESS_SPOOL_MODE", cmd_ACE_SET_ENDLESS_SPOOL_MODE,
      "Set endless spool match mode. MODE=exact|material|next"),
     ("ACE_GET_ENDLESS_SPOOL_MODE", cmd_ACE_GET_ENDLESS_SPOOL_MODE, "Query current match mode"),

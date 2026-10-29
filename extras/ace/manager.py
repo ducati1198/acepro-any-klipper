@@ -3594,6 +3594,8 @@ class AceManager:
                 f"PURGE_MAX_CHUNK_LENGTH={self.purge_max_chunk_length}"
             )
 
+            self.record_stat("tool_changes", 1)
+            self.record_stat("purge_mm", final_purge_length)
             gcode_move.reset_last_position()
             status = f"Tool {current_tool} → {target_tool} (ACE[{target_ace.instance_num}])"
         else:
@@ -3645,6 +3647,29 @@ class AceManager:
 
     # ========== Status and Reporting ==========
 
+    STAT_NAMES = ("tool_changes", "purge_mm", "cuts")
+
+    def record_stat(self, name, amount=1):
+        """Add to a persistent usage counter (cuts, tool changes, purged mm)."""
+        if name not in self.STAT_NAMES:
+            return
+        try:
+            key = f"ace_stat_{name}"
+            total = float(self.state.get(key, 0) or 0) + float(amount)
+            self.state.set(key, round(total, 1) if name == "purge_mm" else int(total))
+        except Exception:
+            logging.exception("ACE: could not update counter %s", name)
+
+    def stats_status(self):
+        out = {}
+        for name in self.STAT_NAMES:
+            try:
+                value = self.state.get(f"ace_stat_{name}", 0) or 0
+                out[name] = round(float(value), 1) if name == "purge_mm" else int(value)
+            except Exception:
+                out[name] = 0
+        return out
+
     def get_status(self, eventtime=None):
         # For the panel and the macros, which number the tools and ask the
         # tool changer by this name; in the fallback too, as the panel
@@ -3679,6 +3704,9 @@ class AceManager:
                 "toolhead_sensor": toolhead_sensor,
                 "rdm_sensor": rdm_sensor,
                 **self.tool_map.status(),
+                "endless_chain": {
+                    str(k): v for k, v in self.endless_spool.get_chains().items()},
+                "stats": self.stats_status(),
                 "lanes": self._moonraker_lane_sync.lane_entries(),
                 "lane_sync_enabled": bool(self._moonraker_lane_sync.enabled),
                 "toolchange_in_progress": bool(self.toolchange_in_progress),

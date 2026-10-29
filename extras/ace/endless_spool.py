@@ -53,6 +53,77 @@ class EndlessSpool:
 
         return mode
 
+    # ------------------------------------------------------------------
+    # Chains: "when T0 runs out, take T4, then T5" (optional, per tool)
+    # ------------------------------------------------------------------
+    CHAIN_KEY = "ace_endless_chain"
+
+    def get_chains(self):
+        """Return {tool: [next tools]} from persistent storage (validated)."""
+        raw = self.manager.state.get(self.CHAIN_KEY, {})
+        chains = {}
+        if not isinstance(raw, dict):
+            return chains
+        for key, value in raw.items():
+            try:
+                tool = int(key)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(value, (list, tuple)):
+                continue
+            nxt = []
+            for item in value:
+                try:
+                    cand = int(item)
+                except (TypeError, ValueError):
+                    continue
+                if cand != tool and cand >= 0 and cand not in nxt:
+                    nxt.append(cand)
+            if nxt:
+                chains[tool] = nxt
+        return chains
+
+    def set_chain(self, tool, next_tools):
+        """Store the takeover order for one tool. An empty list removes it."""
+        chains = self.get_chains()
+        clean = []
+        for cand in next_tools:
+            if cand != tool and cand >= 0 and cand not in clean:
+                clean.append(cand)
+        if clean:
+            chains[tool] = clean
+        else:
+            chains.pop(tool, None)
+        self.manager.state.set_and_save(
+            self.CHAIN_KEY, {str(k): v for k, v in sorted(chains.items())})
+        return clean
+
+    def clear_chains(self, tool=None):
+        """Remove one chain, or all of them when tool is None."""
+        if tool is None:
+            self.manager.state.set_and_save(self.CHAIN_KEY, {})
+            return
+        self.set_chain(tool, [])
+
+    def find_chain_match(self, current_tool):
+        """First ready slot of the tool's chain, or -1 (falls back to the match mode)."""
+        for cand in self.get_chains().get(current_tool, []):
+            inst_num = get_instance_from_tool(cand)
+            local_slot = get_local_slot(cand, inst_num)
+            if inst_num < 0 or local_slot < 0:
+                continue
+            cand_ace = ACE_INSTANCES.get(inst_num)
+            if not cand_ace:
+                continue
+            status = cand_ace.inventory[local_slot].get("status")
+            if status != "ready":
+                logging.info(
+                    f"ACE: Chain candidate T{cand} skipped - status={status} (need 'ready')")
+                continue
+            logging.info(f"ACE: Chain match: T{current_tool} -> T{cand}")
+            return cand
+        return -1
+
     def find_exact_match(self, current_tool):
         """
         Find next spool with matching material and optionally color.
@@ -79,6 +150,10 @@ class EndlessSpool:
         ace_inst = ACE_INSTANCES.get(inst_num)
         if not ace_inst:
             return -1
+
+        chain_match = self.find_chain_match(current_tool)
+        if chain_match >= 0:
+            return chain_match
 
         current_inv = ace_inst.inventory[local_slot]
         current_material = current_inv.get("material", "").lower().strip()
