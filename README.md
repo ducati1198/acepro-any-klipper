@@ -11,7 +11,7 @@ Tuned and tested on a **Creality K1 Max** (Raspberry Pi 5, Kalico, Fluidd, Klipp
 [![Fluidd](https://img.shields.io/badge/Fluidd-1.37.7%20panel-orange.svg)](fluidd/)
 [![OrcaSlicer](https://img.shields.io/badge/OrcaSlicer-2.5%20plugin-purple.svg)](orca_plugin/)
 
-<img src="img/ACEPro.png" alt="ACE Pro" width="320">
+<img src="orca_plugin/panel-preview.png" alt="ACE Spools panel in OrcaSlicer" width="70%">
 
 </div>
 
@@ -55,11 +55,6 @@ Tuned and tested on a **Creality K1 Max** (Raspberry Pi 5, Kalico, Fluidd, Klipp
 | **Moonraker `lane_data` sync** | Orca sees the loaded filament types and colours. |
 | **RFID sync** | Reads material, colour and temperature from the ACE tags. |
 | **Safety** | Connection supervision, runout and tangle handling, recovery after a failed load. |
-
-<div align="center">
-<img src="img/ks_main_ace_pro.png" alt="KlipperScreen ACE Pro panel" width="45%">
-<img src="img/ace-dashboard.png" alt="ACE dashboard" width="45%">
-</div>
 
 ---
 
@@ -244,10 +239,6 @@ Also check:
 
 The plugin lets you choose the physical spool for each sliced filament inside Orca. Full guide: [`orca_plugin/INSTALL.md`](orca_plugin/INSTALL.md).
 
-<div align="center">
-<img src="orca_plugin/panel-preview.png" alt="ACE Spools panel in OrcaSlicer" width="70%">
-</div>
-
 1. In OrcaSlicer 2.5 or newer open **File → Plugins**.
 2. **Browse plugins → Install local plugin** and pick `orca_plugin/ace_spool_mapper.py`.
 3. Click **Yes** when Orca asks whether the plugin may connect to your printer.
@@ -360,12 +351,6 @@ panel: acepro
 Restart it: `sudo systemctl restart KlipperScreen`.
 
 The panel offers endless spool and match mode, unit cycling, slot material/colour/temperature, load/unload, feed assist, RFID sync and the dryer.
-
-<div align="center">
-<img src="img/ks_spool_config.png" width="30%">
-<img src="img/ks_spool_load_unload.png" width="30%">
-<img src="img/ks_dryer.png" width="30%">
-</div>
 
 On a 1024×600 screen, use `font_size = small` (the installer sets it). If a layout is cut off, reduce the font or open an issue.
 
@@ -545,7 +530,7 @@ acepro-any-klipper/
 ├── slicer/                       Orca helper scripts
 ├── tools/ace_console.py          Serial console for debugging
 ├── tests/                        Test suite
-└── img/                          Screenshots
+└── img/                          Upstream screenshots (not used in this README)
 ```
 
 ---
