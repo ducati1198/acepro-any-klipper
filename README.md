@@ -190,6 +190,8 @@ Important positions in `acepro_macros.cfg`:
 ### 3.2 Driver (one-command installer)
 
 ```bash
+sudo apt-get update
+sudo apt-get install -y git
 cd ~
 git clone -b dev https://github.com/ducati1198/acepro-any-klipper
 cd acepro-any-klipper
