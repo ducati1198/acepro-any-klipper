@@ -684,11 +684,21 @@ pytest
 
 ### Raspberry Pi 5 + USB HAT (Waveshare PCIe → USB HAT+)
 
-On my Pi 5 a kernel update made the HAT's USB controller fail (`xhci` error -12, tracked upstream as raspberrypi/linux #7715). Klipper then could not find the ACE units, the toolhead MCU or the expander board, and failed with the `'NoneType'` error above. The fix was to **stay on the last working kernel** (6.12.96) until a fixed kernel is released:
+On a Pi 5 the newer 6.12.x kernels fail to start the HAT's USB controller (`xhci_hcd ... can't setup: -12`, tracked upstream as [raspberrypi/linux #7715](https://github.com/raspberrypi/linux/issues/7715), still open when this was written). Klipper then cannot find the ACE units, the toolhead MCU or the expander board, and fails with the `'NoneType'` error above. A fresh Raspberry Pi OS install gets the newest kernel, so it hits this straight away. Reported broken: 6.12.109. Reported working: 6.12.75 (upstream report) and 6.12.96 (my printer).
 
-- Boot the older kernel by pointing `config.txt` at its image and initramfs, and write the file with a `sync` (an unflushed write to the FAT boot partition is lost on reboot).
-- Do not run a full `apt upgrade` of the kernel packages until the issue is fixed.
-- When a fixed kernel is out, remove the pin and reboot.
+**Fix: stay on a working kernel.** One command does it (the installer offers it too when it sees the error):
+
+```bash
+sudo bash tools/pin-pi5-kernel.sh --check     # look only: kernel, xhci errors, installed kernels
+sudo bash tools/pin-pi5-kernel.sh             # install and pin 6.12.96 (or: --kernel 6.12.75)
+sudo reboot
+```
+
+It installs the older kernel package if needed, copies its kernel and initramfs next to `config.txt`, points `config.txt` at them for the Pi 5 only, runs `sync` (an unflushed write to the FAT boot partition is lost on reboot), and holds the kernel meta packages so `apt upgrade` does not move you forward. After the reboot check `uname -r` and `dmesg | grep -i xhci`.
+
+If apt does not offer that version any more, the script lists what it does offer; pick one with `--kernel`.
+
+When a fixed kernel is released, undo it with `sudo bash tools/pin-pi5-kernel.sh --unpin` and reboot.
 
 If your ACE and MCUs disappear after an OS update, check `dmesg | grep -i xhci` first.
 

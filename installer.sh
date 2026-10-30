@@ -442,6 +442,28 @@ create_or_replace_symlink() {
 # Main Installation
 # ============================================================================
 
+# Pi 5 + PCIe USB HAT: newer 6.12.x kernels fail to start the HAT's USB controller
+# (xhci "can't setup: -12", raspberrypi/linux #7715). Warn and offer the kernel pin.
+check_pi5_usb_hat() {
+    grep -qa "Raspberry Pi 5" /proc/device-tree/model 2>/dev/null || return 0
+    local log
+    log="$( { dmesg 2>/dev/null; journalctl -k --no-pager 2>/dev/null; } | grep -iE "xhci.*(can't setup|probe.*failed)" | head -2 )"
+    [ -n "$log" ] || return 0
+
+    print_header "Pi 5 USB HAT problem detected"
+    print_warning "The kernel log shows the USB HAT controller failing to start:"
+    echo "$log" | sed 's/^/    /'
+    print_info "Without it Klipper cannot see the ACE units or the MCUs behind the HAT."
+    print_info "Known upstream issue: raspberrypi/linux #7715 (newer 6.12.x kernels). See README section 14."
+    if [ -f "$SCRIPT_DIR/tools/pin-pi5-kernel.sh" ] && prompt_yes_no "Pin the last working kernel (6.12.96) now? Needs sudo and a reboot."; then
+        if sudo bash "$SCRIPT_DIR/tools/pin-pi5-kernel.sh"; then
+            print_success "Kernel pinned. Reboot when the installation is finished, then check: dmesg | grep -i xhci"
+        else
+            print_warning "Pinning failed. Run it by hand later: sudo bash tools/pin-pi5-kernel.sh --check"
+        fi
+    fi
+}
+
 main() {
     print_header "ACE Pro Klipper Driver - Interactive Installer"
     
@@ -478,6 +500,8 @@ main() {
         exit 1
     fi
     print_success "Using config directory: $CONFIG_DIR"
+
+    check_pi5_usb_hat
     
     # ========================================================================
     # Step 2: Ask for confirmation
