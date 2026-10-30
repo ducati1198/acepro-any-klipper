@@ -1860,7 +1860,7 @@ def cmd_ACE_CHANGE_TOOL(manager, gcmd, tool_index):
                 )
 
                 gcode.run_script_from_command(
-                    f'RESPOND TYPE=command MSG="action:prompt_button Retry T{tool_index}|T{tool_index}|primary"'
+                    f'RESPOND TYPE=command MSG="action:prompt_button Retry T{tool_index}|ACE_CHANGE_TOOL TOOL={tool_index}|primary"'
                 )
 
                 gcode.run_script_from_command(

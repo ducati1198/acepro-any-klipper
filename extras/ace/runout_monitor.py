@@ -530,7 +530,7 @@ class RunoutMonitor:
             )
             self.gcode.run_script_from_command(
                 f'RESPOND TYPE=command MSG="action:prompt_button '
-                f'Retry T{tool_index}|T{tool_index}|primary"'
+                f'Retry T{tool_index}|ACE_CHANGE_TOOL TOOL={tool_index}|primary"'
             )
             self.gcode.run_script_from_command(
                 'RESPOND TYPE=command MSG="action:prompt_footer_button '
@@ -914,7 +914,7 @@ class RunoutMonitor:
         )
 
         self.gcode.run_script_from_command(
-            f'RESPOND TYPE=command MSG="action:prompt_button Retry T{tool_index}|T{tool_index}|primary"'
+            f'RESPOND TYPE=command MSG="action:prompt_button Retry T{tool_index}|ACE_CHANGE_TOOL TOOL={tool_index}|primary"'
         )
 
         self.gcode.run_script_from_command(
