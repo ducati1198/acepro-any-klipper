@@ -200,7 +200,7 @@ chmod +x installer.sh
 The installer asks before each step and is safe to run again (it backs up before replacing anything). It will:
 
 1. Link the ACE driver (`extras/ace/`), `virtual_pins` and the ACE temperature sensor into Klipper's `extras` folder.
-2. Install the Moonraker `ace_status` component and add `[ace_status]` to `moonraker.conf`.
+2. Remove the old ACE web dashboard links, if an earlier install added them (the dashboard is no longer shipped).
 3. Check that `pyserial` and `jinja2` are available and that the driver compiles.
 4. Install the **Fluidd ACE panel** (ACE card + spool picker): checks the zip, backs up `~/fluidd`, keeps your `config.json`, and restores the backup if the panel isn't found afterwards.
 5. Copy `acepro.cfg`, `acepro_printer_macros.cfg`, `acepro_setting.cfg` and `acepro_macros.cfg` into your config folder (existing files are backed up) and add `[include acepro.cfg]` at the top of `printer.cfg`.
@@ -475,7 +475,7 @@ cp ~/fluidd_backup/config.json ~/fluidd/ 2>/dev/null   # keep your Fluidd settin
 
 Hard-refresh the browser. If the card is missing, open the dashboard layout editor and add **ACE Pro**.
 
-The card expects the switches `[output_pin endless_spool]` and `[output_pin ACE_Pro]`, which `acepro_setting.cfg` defines. Moonraker must have `[ace_status]` enabled (the installer adds it).
+The card expects the switches `[output_pin endless_spool]` and `[output_pin ACE_Pro]`, which `acepro_setting.cfg` defines.
 
 The counters and endless spool order need the updated driver and `acepro.cfg` from this repo (`CUT_TIP` calls `ACE_COUNT_CUT`). Without them the panel still works, but those two parts stay empty.
 
@@ -724,7 +724,6 @@ acepro-any-klipper/
 ├── fluidd/                       Fluidd 1.37.7 build + patch (ACE panel, spool picker)
 ├── orca_plugin/                  OrcaSlicer 2.5 "ACE Spool Mapper"
 ├── KlipperScreen/acepro.py       KlipperScreen panel
-├── acepro-mmu-dashboard/         Moonraker ace_status plugin and web dashboard
 ├── slicer/                       Orca helper scripts
 ├── tools/ace_console.py          Serial console for debugging
 ├── tests/                        Test suite

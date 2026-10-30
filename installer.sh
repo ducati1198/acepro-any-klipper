@@ -190,23 +190,36 @@ ensure_klipperscreen_acepro_menu() {
     ensure_menu_entry "$conf" "[menu __print acepro]" "$entry_block_print" "ACE Pro (print menu)"
 }
 
-# Ensure [ace_status] section exists in moonraker.conf (create file if missing)
-ensure_moonraker_ace_status() {
-    local conf="$1"
+# The ACE web dashboard (acepro-mmu-dashboard) is no longer shipped. If an earlier
+# install linked it, remove those links and the empty [ace_status] section so Moonraker
+# does not try to load a component that is gone.
+remove_old_ace_dashboard() {
+    local moonraker_conf="$INSTALL_HOME/printer_data/config/moonraker.conf"
+    local f changed=0
 
-    if [ -f "$conf" ] && grep -qi '^[[:space:]]*\[ace_status\]' "$conf"; then
-        print_success "moonraker.conf: [ace_status] already present"
-        return 0
+    for f in "$INSTALL_HOME/moonraker/moonraker/components/ace_status.py" \
+             "$INSTALL_HOME"/mainsail/{ace.html,ace-dashboard.js,ace-dashboard.css,ace-dashboard-config.js,favicon.svg} \
+             "$INSTALL_HOME"/fluidd/{ace.html,ace-dashboard.js,ace-dashboard.css,ace-dashboard-config.js,favicon.svg}; do
+        if [ -L "$f" ] && readlink "$f" | grep -q "acepro-mmu-dashboard"; then
+            rm -f "$f" && print_success "Removed old dashboard link: $f" && changed=1
+        fi
+    done
+
+    if [ -f "$moonraker_conf" ] && grep -qi '^[[:space:]]*\[ace_status\][[:space:]]*$' "$moonraker_conf"; then
+        # Only touch it when the section is empty (the installer used to add just the header).
+        if awk '/^[[:space:]]*\[ace_status\]/{f=1;next} f&&/^[[:space:]]*\[/{exit} f&&/^[^#[:space:]]/{found=1} END{exit found?0:1}' "$moonraker_conf"; then
+            print_warning "$moonraker_conf: [ace_status] has settings, left as is. Remove it yourself, the component is gone."
+        else
+            backup_file "$moonraker_conf" >/dev/null
+            sed -i -e '/^[[:space:]]*\[ace_status\][[:space:]]*$/d' -e '/^# ACE status extension$/d' "$moonraker_conf"
+            print_success "Removed the empty [ace_status] section from $moonraker_conf"
+            changed=1
+        fi
     fi
 
-    mkdir -p "$(dirname "$conf")"
-    if [ ! -f "$conf" ]; then
-        printf '# Moonraker configuration\n\n' > "$conf"
-        print_warning "Created new moonraker.conf at $conf"
+    if [ "$changed" -eq 1 ]; then
+        MOONRAKER_RESTART_NEEDED=1
     fi
-
-    printf '\n# ACE status extension\n[ace_status]\n' >> "$conf"
-    print_success "Added [ace_status] to $conf"
 }
 
 # Ensure font_size = small is set in the user-editable section of KlipperScreen.conf
@@ -517,7 +530,7 @@ Config directory:        $CONFIG_DIR
 
 Installation steps:
 1. Link ace module to Klipper extras
-1b. (Optional) Install ACE status Moonraker component + dashboard symlinks
+1b. Remove the old ACE web dashboard links if an earlier install added them
 1c. Check the Python packages the driver needs (pyserial, jinja2)
 1d. (Optional) Install the Fluidd ACE Pro card + spool picker
 2. Ensure printer.cfg includes acepro.cfg (at the top) and copy acepro.cfg
@@ -573,78 +586,13 @@ EOF
     fi
 
     # ========================================================================
-    # Step 1b: ACE Status Integration (Optional) - Using acepro-mmu-dashboard
+    # Step 1b: Remove the old ACE web dashboard (no longer shipped)
     # ========================================================================
 
-    ACE_STATUS_DIR="$SCRIPT_DIR/acepro-mmu-dashboard"
-    if [ -d "$ACE_STATUS_DIR" ]; then
-        print_header "Step 1b: ACE Status Integration (Optional)"
+    print_header "Step 1b: Old ACE web dashboard"
+    remove_old_ace_dashboard
+    print_info "Nothing to do here unless an earlier install linked the dashboard."
 
-        if prompt_yes_no "Install ACE status Moonraker component + dashboard symlinks?"; then
-            ACE_MOONRAKER_DEFAULT="$INSTALL_HOME/moonraker"
-            ACE_MAINSAIL_DEFAULT="$INSTALL_HOME/mainsail"
-            ACE_FLUIDD_DEFAULT="$INSTALL_HOME/fluidd"
-            ACE_MOONRAKER_CONF_DEFAULT="$INSTALL_HOME/printer_data/config/moonraker.conf"
-
-            # Moonraker component
-            ACE_MOONRAKER_DIR=$(prompt_input "Moonraker directory (press ENTER to use default)" "$ACE_MOONRAKER_DEFAULT")
-            ACE_MOONRAKER_COMPONENTS="$ACE_MOONRAKER_DIR/moonraker/components"
-            if [ -d "$ACE_MOONRAKER_COMPONENTS" ]; then
-                ACE_STATUS_SOURCE="$ACE_STATUS_DIR/moonraker/ace_status.py"
-                ACE_STATUS_TARGET="$ACE_MOONRAKER_COMPONENTS/ace_status.py"
-                create_or_replace_symlink "$ACE_STATUS_SOURCE" "$ACE_STATUS_TARGET" "ACE status Moonraker component"
-                MOONRAKER_RESTART_NEEDED=1
-
-                # Ensure moonraker.conf has [ace_status]
-                ACE_MOONRAKER_CONF=$(prompt_input "moonraker.conf path (press ENTER to use default)" "$ACE_MOONRAKER_CONF_DEFAULT")
-                ensure_moonraker_ace_status "$ACE_MOONRAKER_CONF"
-            else
-                print_warning "Moonraker components directory not found: $ACE_MOONRAKER_COMPONENTS"
-                print_info "Skipping Moonraker ACE status symlink"
-            fi
-
-            # Mainsail dashboard files
-            if prompt_yes_no "Link dashboard files into Mainsail?"; then
-                ACE_MAINSAIL_DIR=$(prompt_input "Mainsail install directory" "$ACE_MAINSAIL_DEFAULT")
-                if [ -d "$ACE_MAINSAIL_DIR" ]; then
-                    for ace_file in ace.html ace-dashboard.js ace-dashboard.css ace-dashboard-config.js favicon.svg; do
-                        create_or_replace_symlink "$ACE_STATUS_DIR/web/$ace_file" "$ACE_MAINSAIL_DIR/$ace_file" "Mainsail $ace_file"
-                    done
-                else
-                    print_warning "Mainsail directory not found: $ACE_MAINSAIL_DIR"
-                    print_info "Skipped Mainsail dashboard links"
-                fi
-            fi
-
-            # Fluidd dashboard files
-            if prompt_yes_no "Link dashboard files into Fluidd?"; then
-                ACE_FLUIDD_DIR=$(prompt_input "Fluidd install directory" "$ACE_FLUIDD_DEFAULT")
-                if [ -d "$ACE_FLUIDD_DIR" ]; then
-                    for ace_file in ace.html ace-dashboard.js ace-dashboard.css ace-dashboard-config.js favicon.svg; do
-                        create_or_replace_symlink "$ACE_STATUS_DIR/web/$ace_file" "$ACE_FLUIDD_DIR/$ace_file" "Fluidd $ace_file"
-                    done
-                else
-                    print_warning "Fluidd directory not found: $ACE_FLUIDD_DIR"
-                    print_info "Skipped Fluidd dashboard links"
-                fi
-            fi
-
-            # ===== Ensure dashboard source files are world-readable =====
-            print_info "Setting permissions 644 on ACE dashboard source files..."
-            if chmod 644 "$ACE_STATUS_DIR"/web/* 2>/dev/null; then
-                print_success "Permissions set on dashboard files"
-            else
-                print_warning "Could not set permissions (maybe files already OK?)"
-            fi
-
-        else
-            print_info "ACE status integration skipped"
-        fi
-    else
-        print_warning "Dashboard directory not found: $ACE_STATUS_DIR"
-        print_info "Skipping ACE status integration (directory missing)"
-    fi
-    
     # ========================================================================
     # Step 1c: Python packages for the driver
     # ========================================================================
@@ -676,7 +624,7 @@ EOF
     print_header "Step 1d: Fluidd ACE panel (Optional)"
 
     echo "Adds an ACE Pro card to the Fluidd dashboard and the 'Choose ACE spools' window"
-    echo "that opens when you press Print. Needs Moonraker's ace_status (step 1b)."
+    echo "that opens when you press Print."
     FLUIDD_PANEL_INSTALLED=0
     if prompt_yes_no "Install the Fluidd ACE panel (Fluidd 1.37.7 build from this repository)?"; then
         FLUIDD_DIR=$(prompt_input "Fluidd install directory" "$INSTALL_HOME/fluidd")
