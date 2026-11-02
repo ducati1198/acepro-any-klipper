@@ -1,6 +1,21 @@
-# CFS purge chute variant (K1 Max) — NOT TESTED outside one printer
+# CFS purge chute variant (K1 Max) — NOT TESTED on any K1 series printer
 
-> **Read this first.** This is a separate set of ACE Pro files for a **K1 Max with the factory CFS purge chute** instead of a servo poop bucket. It was written for and used on **one K1 Max** only. It has **not** been tested on a K1, a K1C, another K1 Max, or any other printer, and it has **not** been run through this repository's installer. Treat it as a starting point you check yourself, with your hand near the power switch the first time.
+> ## ⚠️ Read this first: untested, use at your own risk
+>
+> This is a separate set of ACE Pro files for a **K1 Max with the factory CFS purge chute** instead of a servo poop bucket.
+>
+> - **It has NOT been tested on any K1 series printer** (K1, K1C, K1 Max or K1 SE). The author does not own the CFS purchase, its extruder or the cutter block, so none of this could be tried on that hardware.
+> - The positions and settings come from the author's own configuration and from the reference project [swilsonnc/ACEPROK1Max](https://github.com/swilsonnc/ACEPROK1Max). They have **not** been verified on a real CFS chute, extruder or cutter block.
+> - It has not been run through this repository's installer either.
+>
+> **Use it entirely at your own risk.** The author and contributors are **not responsible for any damage** to your printer, toolhead, cutter, chute, hotend, bed, filament or anything else, or for any injury or loss, that results from using these files. They come with no warranty (see the GPL-3.0 licence).
+>
+> ### ⚠️ Caution: check before you run anything
+>
+> - **Check your printer's specs yourself.** Confirm your axis limits (`position_max`), where your chute, flap and cutter block really are, your sensor pins and your toolhead before you trust any number in these files.
+> - Every position is a placeholder until **you** have measured it on **your** machine. They start locked (`variable_positions_confirmed: False`) on purpose. Do not set it to True until you have checked them.
+> - **Test in small steps**: one move at a time, slowly, with the nozzle cold and no filament loaded first. Keep your hand on the power switch or emergency stop. Never leave the printer unattended while testing.
+> - A wrong position can crash the toolhead into the chute, the cutter or the frame. If anything looks wrong, stop and power off.
 
 It is optional. Nothing in `config/`, the installer, the tests or the other docs depends on it, and the installer never installs or changes it.
 
@@ -57,12 +72,13 @@ This copy adds a lock that the original CFS files did not have. `variable_positi
 | Nozzle wipe | start X175 Y278, zigzag, 13 mm | `variable_wipe_*` |
 | Clearance lift | Z60 | `variable_clearance_z_height` |
 
-The author's K1 Max has `position_max: 304` on Y, so the 305.5 flap wipe runs at Y304 there. Klipper refuses any move beyond your axis limits.
+On the author's printer `position_max` on Y is 304, so the 305.5 flap wipe runs at Y304 there. Klipper refuses any move beyond your axis limits. Check yours.
 
 ## K1 and other printers
 
+- **Nothing here has been tested on any K1 series printer.**
 - **K1, K1C and other smaller printers:** the numbers above do not fit. The chute at Y303 is far beyond a 220 mm bed, so moves would be rejected. There are no verified values for them here. You would have to measure every position yourself. Keep the lock on until you have.
-- **Another K1 Max:** the CFS chute is fixed hardware, so the chute and flap numbers should be close. The cutter position depends on where the cutter is mounted, so measure it.
+- **A K1 Max:** the CFS chute is factory hardware, so the chute and flap numbers may be close, but that has **not** been verified. The cutter position depends on where the cutter block is mounted, so measure it.
 - Use `CUT_CAL_START` and `CUT_CAL_STEP` to find the cutter positions in small steps. Test `WIPE_ON_CHUTE_FLAP` and `HIT_PURGE_CHUTE` on their own, slowly, with the nozzle cold and nothing loaded, before a real tool change.
 
 ## How this differs from the main install

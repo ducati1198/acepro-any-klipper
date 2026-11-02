@@ -14,7 +14,7 @@
 - **`ACE_SELFTEST`:** read-only check of the driver, each unit's connection, temperatures, sensors, confirmed positions and the switches. Nothing moves.
 - **Software Updates entry:** the installer adds `[update_manager acepro]` to `moonraker.conf` (saved first; on Simple AF it asks first because Simple AF may overwrite that file). It only downloads new code; run `./installer.sh --update` after.
 - **Fluidd macro category:** the installer puts the ACE macros (not the hidden `_` ones) into a Fluidd category called ACEPRO MACRO, hot pink. Macros you already sorted stay where they are. Display setting only (Moonraker database); saved first, `--uninstall` removes it, `--undo` puts the old settings back.
-- **Optional CFS purge chute variant** in `variants/cfs-chute/` (K1 Max, **untested** outside one printer, not installed by the installer, nothing else changed). Positions start locked. See its README and section 15 of the main README.
+- **Optional CFS purge chute variant** in `variants/cfs-chute/` (K1 Max, **not tested on any K1 series printer, use at your own risk**, not installed by the installer, nothing else changed). Positions start locked. See its README and section 15 of the main README.
 - **"What changed" after `--update`:** the entries of this file newer than your installed version are shown.
 
 ## 1.0.0 (installer for Klipper, Kalico and Simple AF)

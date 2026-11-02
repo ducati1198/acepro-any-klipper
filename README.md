@@ -854,9 +854,13 @@ If your ACE and MCUs disappear after an OS update, check `dmesg | grep -i xhci` 
 
 ## 15. CFS purge chute variant (K1 Max, untested)
 
-For a K1 Max with the factory **CFS purge chute** (no servo bucket) there is a separate, optional set of files in [`variants/cfs-chute/`](variants/cfs-chute/). **It has not been tested outside one K1 Max and has not been run through the installer.** It is not installed or changed by `installer.sh`, and nothing in `config/` depends on it.
+For a K1 Max with the factory **CFS purge chute** (no servo bucket) there is a separate, optional set of files in [`variants/cfs-chute/`](variants/cfs-chute/). It is not installed or changed by `installer.sh`, and nothing in `config/` depends on it.
 
-What it does: after the cut the head approaches the chute from Y287 and creeps in, purges, retracts 2 mm, shakes the chute (`HIT_PURGE_CHUTE`), wipes the nozzle on the silicone flap (`WIPE_ON_CHUTE_FLAP`), then backs out slowly. It is based on the author's printer and on [swilsonnc/ACEPROK1Max](https://github.com/swilsonnc/ACEPROK1Max).
+> **⚠️ Untested, use at your own risk.** It has **not been tested on any K1 series printer**: the author does not own the CFS purchase, its extruder or the cutter block. It has not been run through the installer either. The author and contributors are **not responsible for any damage** to your printer or anything else, or for any injury or loss, caused by these files; there is no warranty.
+>
+> **Caution:** check **your own printer's specs** (axis limits, where the chute, flap and cutter block really are, sensor pins) before running anything, and **test in small steps**: slowly, nozzle cold, no filament, hand on the power switch. A wrong position can crash the toolhead.
+
+What it does: after the cut the head approaches the chute from Y287 and creeps in, purges, retracts 2 mm, shakes the chute (`HIT_PURGE_CHUTE`), wipes the nozzle on the silicone flap (`WIPE_ON_CHUTE_FLAP`), then backs out slowly. Its numbers come from the author's own configuration and from [swilsonnc/ACEPROK1Max](https://github.com/swilsonnc/ACEPROK1Max), and have not been verified on a real CFS chute.
 
 - **Use it instead of** `acepro.cfg`: change `[include acepro.cfg]` to `[include cfs_acepro.cfg]` in `printer.cfg`. Never include both.
 - **Positions start locked** (`variable_positions_confirmed: False`). Every number is a K1 Max number. A K1 or K1C has a smaller bed and cannot reach them: measure everything yourself.
