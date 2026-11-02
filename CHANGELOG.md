@@ -17,4 +17,9 @@
 - **Fix:** `PUSHOVER_ENCODER_SENSOR` is now defined (does nothing until you define your own), so a sensor alert no longer fails with "Unknown command" on a fresh install.
 - **Fix:** removed the `SMART_TOOL` branch from `MY_START_PRINT`; the macro never existed.
 - **Examples (not installed):** `examples/servo_wiper.cfg`, `examples/saf_hooks_example.cfg`.
+- **One ACE temperature sensor per unit.** With 1 unit you get `acepro_temp_1`, with 2 you also get `acepro_temp_2`, with 3 you get `acepro_temp_3`. The extra ones are commented out.
+- **Refuses to run while a print is active** (printing or paused). No override. `--check`, `--support-bundle` and `--dry-run` still work.
+- **Virtual-pin order warning.** If a file uses `virtual_pin:` before `[virtual_pins]` is loaded (Klipper: "Unknown pin chip name 'virtual_pin'"), the installer and the config check say so; the installer offers to add `[virtual_pins]` at the top of `printer.cfg` (saved first, only on yes).
+- **ACE USB check.** Warns if no ACE shows up on USB, then carries on.
+- **More folder layouts:** `printer_data` in another place, several Klipper instances (you pick one; service `klipper-N`), and Creality K1 native `/usr/data` (experimental, no systemd or sudo). Also checks sudo and the Klipper service name.
 - **Tests:** `bash tests/installer/run_tests.sh` runs the installer against fake folders.

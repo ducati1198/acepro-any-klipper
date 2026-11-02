@@ -265,6 +265,13 @@ Pick **Simple AF**. The installer follows Simple AF's rules:
 - A Simple AF update only runs `git reset --hard` on its Klipper copy, so the links usually survive. Run `./installer.sh --repair` afterwards to be sure.
 - Keep the start line `MY_START_PRINT TOOL=... ` (section 5.1). It loads the tool and then runs Simple AF's `START_PRINT`.
 
+**Safety checks the installer makes first:**
+
+- It **stops if a print is running or paused** (there is no override). `--check`, `--support-bundle` and `--dry-run` still work.
+- It warns, and carries on, if it **sees no ACE on USB**.
+- It finds `printer_data` in other places: several Klipper instances (you pick one) and the Creality K1 native layout (`/usr/data`, experimental, no systemd or sudo). It also checks for sudo and the Klipper service name.
+- If a file uses a `virtual_pin:` before `[virtual_pins]` loads, it explains and offers to add `[virtual_pins]` at the top of `printer.cfg` (saved first).
+
 ### 3.3 Check `printer.cfg`
 
 The installer adds these for you (`[force_move]` only if you have a cutter). Check they are there:
@@ -363,7 +370,7 @@ When all positions are measured, set `variable_positions_confirmed: True`. Until
 
 ### 4.4 Temperature sensors
 
-`acepro_setting.cfg` already adds a `temperature_ace` sensor per unit (`acepro_temp_1`, `acepro_temp_2`). Add another for a third unit.
+`acepro_setting.cfg` has a `temperature_ace` sensor per unit (`acepro_temp_1`, `_2`, `_3`). The installer keeps the first N for the N units you chose and comments out the rest.
 
 ---
 

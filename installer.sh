@@ -249,10 +249,111 @@ choose_profile() {
 }
 
 # ============================================================================
+# Pre-flight checks: print active, sudo / service, ACE USB, folder layouts
+# ============================================================================
+
+K1_ROOT="${ACE_K1_ROOT:-/usr/data}"          # Creality K1 native layout (tests point this elsewhere)
+KLIPPER_SERVICE="klipper"
+SERVICE_MODE="systemd"                       # systemd | none (K1 native has no systemd)
+LAYOUT="standard"
+
+# Refuse to change anything while Klipper is printing or paused. No override flag, on purpose.
+print_state() { # -> printing|paused|standby|complete|... (empty if Klipper/Moonraker cannot be reached)
+    [ -n "${ACE_PRINT_STATE:-}" ] && { echo "$ACE_PRINT_STATE"; return 0; }
+    [ "$TESTING" = 1 ] && { echo ""; return 0; }
+    curl -s -m 3 "$MOONRAKER_URL/printer/objects/query?print_stats" 2>/dev/null | \
+        python3 -I -c 'import sys,json; print(json.load(sys.stdin)["result"]["status"]["print_stats"]["state"])' 2>/dev/null || echo ""
+}
+
+guard_not_printing() {
+    local st; st="$(print_state)"
+    case "$st" in
+        printing|paused)
+            die_with_fix "a print is ${st} right now, so I will not change your printer"                 "wait until the print is finished or cancelled, then run this again. (--check, --support-bundle and --dry-run still work.)" ;;
+    esac
+}
+
+check_sudo_service() {
+    [ "$SERVICE_MODE" = none ] && return 0
+    if [ "$(id -u)" != 0 ] && ! command -v sudo >/dev/null 2>&1; then
+        warn_later "sudo is not installed and you are not root, so I cannot restart Klipper. Restart it yourself after the install."
+    fi
+    command -v systemctl >/dev/null 2>&1 || return 0
+    [ "$LAYOUT" = multi ] && return 0
+    local u
+    u="$(systemctl list-unit-files 'klipper*.service' --no-legend 2>/dev/null | awk '{print $1}' | sed 's/\.service$//')"
+    [ -n "$u" ] || return 0
+    if echo "$u" | grep -qx klipper; then KLIPPER_SERVICE=klipper; return 0; fi
+    if [ "$(echo "$u" | wc -l)" = 1 ]; then
+        KLIPPER_SERVICE="$u"
+        print_info "Klipper service name: $KLIPPER_SERVICE"
+    else
+        KLIPPER_SERVICE="$(ask_text "Which Klipper service should I restart? ($(echo $u | tr '\n' ' '))" "$(echo "$u" | head -1)")"
+    fi
+}
+
+svc_restart() { # name
+    if [ "$SERVICE_MODE" = none ]; then
+        print_warning "This system has no systemd. Restart $1 the way your firmware does (K1: /etc/init.d/S55klipper_service restart)."
+        return 1
+    fi
+    if [ "$(id -u)" = 0 ]; then systemctl restart "$1"; else sudo systemctl restart "$1"; fi
+}
+
+check_ace_usb() {
+    [ "$TESTING" = 1 ] && [ -z "${ACE_USB_LIST:-}" ] && return 0
+    local seen
+    seen="$( { ls /dev/serial/by-id 2>/dev/null; lsusb 2>/dev/null; echo "${ACE_USB_LIST:-}"; } | grep -iE 'anycubic|ace|28e9' | head -1 || true)"
+    if [ -n "$seen" ]; then
+        print_success "ACE USB device found"
+    else
+        print_warning "I do not see an ACE Pro on USB. Continuing anyway."
+        why "it may be unplugged or powered off. The install works without it; the driver connects once the unit is on."
+        warn_later "No ACE USB device was seen during the install. Check the USB cable and the ACE power, then run ./installer.sh --check."
+    fi
+}
+
+# Folder layouts. Fills KLIPPER_DIR / CONFIG_DIR when they are still empty.
+detect_layout() {
+    [ -n "$KLIPPER_DIR" ] && [ -n "$CONFIG_DIR" ] && return 0
+    local std="$INSTALL_HOME/printer_data/config" multi=() d
+    if [ -z "$CONFIG_DIR" ]; then
+        if [ -d "$std" ]; then
+            :
+        else
+            for d in "$INSTALL_HOME"/printer_*_data/config; do [ -d "$d" ] && multi+=("$d"); done
+            if [ "${#multi[@]}" -gt 0 ]; then
+                LAYOUT=multi
+                print_info "More than one Klipper instance found:"
+                local i=1; for d in "${multi[@]}"; do echo "  $i) $d"; i=$((i+1)); done
+                local pick; pick="$(ask_text "Which one is the printer with the ACE?" "1")"
+                case "$pick" in ''|*[!0-9]*) pick=1 ;; esac
+                [ "$pick" -ge 1 ] && [ "$pick" -le "${#multi[@]}" ] || pick=1
+                CONFIG_DIR="${multi[$((pick-1))]}"
+                local inst; inst="$(basename "$(dirname "$CONFIG_DIR")")"   # printer_2_data
+                inst="${inst#printer_}"; inst="${inst%_data}"
+                KLIPPER_SERVICE="klipper-$inst"
+            elif [ -d "$K1_ROOT/printer_data/config" ]; then
+                LAYOUT=k1native
+                CONFIG_DIR="$K1_ROOT/printer_data/config"
+            fi
+        fi
+    fi
+    if [ -z "$KLIPPER_DIR" ] && [ "$LAYOUT" = k1native ] && [ -d "$K1_ROOT/klipper/klippy" ]; then
+        KLIPPER_DIR="$K1_ROOT/klipper"
+    fi
+    if [ "$LAYOUT" = k1native ]; then
+        SERVICE_MODE=none
+        print_warning "Creality K1 native layout ($K1_ROOT). This is experimental: no systemd and no sudo here."
+    fi
+}
+
+# ============================================================================
 # Folders
 # ============================================================================
 
 find_dirs() {
+    detect_layout
     if [ -z "$KLIPPER_DIR" ]; then
         KLIPPER_DIR="$INSTALL_HOME/klipper"
         if [ ! -d "$KLIPPER_DIR/klippy" ]; then
@@ -442,6 +543,18 @@ stage_files() {
     else
         stage_fresh_values
     fi
+    stage_ace_temps
+}
+
+# One temperature sensor per ACE unit: keep acepro_temp_1..N, comment out the rest.
+stage_ace_temps() {
+    local f="$STAGE/acepro_setting.cfg" i
+    [ -f "$f" ] || return 0
+    for i in 1 2 3; do
+        if [ "$i" -gt "$ACE_COUNT" ]; then
+            cfg_tool comment "$f" "temperature_sensor acepro_temp_$i" "Left out by installer.sh: you have $ACE_COUNT ACE unit(s)." || true
+        fi
+    done
 }
 
 write_servo_cfg() { # path pin
@@ -552,6 +665,25 @@ show_plan() {
     fi
     [ "$WANT_FLUIDD" = 1 ] && echo "  PANEL   Fluidd ACE panel (old Fluidd saved as ${FLUIDD_DIR}_backup_*)"
     [ "$WANT_KS" = 1 ] && echo "  PANEL   KlipperScreen ACE menu"
+}
+
+# A file that uses "virtual_pin:" before [virtual_pins] is loaded stops Klipper with
+# "Unknown pin chip name 'virtual_pin'". Warn, and fix it only if you say yes.
+check_virtual_pin_order() {
+    local py out; py="$(klippy_python)"
+    out="$("$py" "$VALIDATOR" "$CONFIG_DIR/printer.cfg" --profile "$PROFILE" 2>&1 | grep 'before \[virtual_pins\]' || true)"
+    [ -n "$out" ] || return 0
+    print_warning "A config file uses a virtual pin before [virtual_pins] is loaded:"
+    echo "$out" | sed 's/^ERROR: */    /'
+    why "Klipper reads files top to bottom, so [virtual_pins] has to come first or it stops with: Unknown pin chip name 'virtual_pin'."
+    if [ "$DRY" = 1 ]; then return 0; fi
+    if ask_yn "Add [virtual_pins] at the top of printer.cfg? (printer.cfg is saved first)" Y; then
+        backup_path "$CONFIG_DIR/printer.cfg"
+        { echo "[virtual_pins]"; echo; cat "$CONFIG_DIR/printer.cfg"; } > "$CONFIG_DIR/printer.cfg.new" && cat "$CONFIG_DIR/printer.cfg.new" > "$CONFIG_DIR/printer.cfg" && rm -f "$CONFIG_DIR/printer.cfg.new"
+        print_success "Added [virtual_pins] at the top of printer.cfg"
+    else
+        warn_later "A file uses a virtual pin before [virtual_pins] loads. Add [virtual_pins] near the top of printer.cfg."
+    fi
 }
 
 # Run the validator on a copy of the config with the new files in it. Only problems the
@@ -783,9 +915,9 @@ klippy_state() {
 restart_and_selftest() {
     local pass=0 fail=0 state="" objs n i
     if [ "$TESTING" = 1 ]; then print_info "Test mode: no restart"; return 0; fi
-    if [ "$MOONRAKER_RESTART_NEEDED" = 1 ]; then ask_yn "Restart Moonraker now?" Y && sudo systemctl restart moonraker; fi
+    if [ "$MOONRAKER_RESTART_NEEDED" = 1 ]; then ask_yn "Restart Moonraker now?" Y && svc_restart moonraker; fi
     if ask_yn "Restart Klipper now so the changes take effect?" Y; then
-        sudo systemctl restart klipper || print_warning "Could not restart Klipper. Run: sudo systemctl restart klipper"
+        svc_restart "$KLIPPER_SERVICE" || print_warning "Could not restart Klipper. Run: sudo systemctl restart $KLIPPER_SERVICE"
     else
         print_warning "Klipper not restarted. Run: sudo systemctl restart klipper"; return 0
     fi
@@ -890,7 +1022,10 @@ do_install() {
     [ "$DRY" = 1 ] && print_info "DRY RUN: I will show what would change and change nothing."
     update_notice
 
+    [ "$DRY" = 1 ] || guard_not_printing
     find_dirs
+    check_sudo_service
+    [ "$DRY" = 1 ] || check_ace_usb
     [ "$DRY" = 1 ] || check_pi5_usb_hat
     [ -f "$CONFIG_DIR/acepro.cfg" ] && existing=1
 
@@ -972,6 +1107,7 @@ do_install() {
     [ "$WANT_KS" = 1 ] && setup_klipperscreen
     [ -f "$(CONF_FILE)" ] && backup_path "$(CONF_FILE)" || echo "NEW $(CONF_FILE)" >> "$BACKUP_DIR/manifest.txt"
     save_answers
+    check_virtual_pin_order
 
     local stale; stale="$(stale_backup_links)"
     [ -n "$stale" ] && warn_later "Old backup links sit in Klipper's extras folder (ace_backup_*). They are harmless; ./installer.sh --repair removes them."
@@ -1019,6 +1155,7 @@ do_check() {
 }
 
 do_repair() {
+    guard_not_printing
     find_dirs
     local saved; saved="$(kv_get "$(CONF_FILE)" PROFILE || true)"
     PROFILE="${saved:-$(detect_profile)}"
@@ -1046,6 +1183,7 @@ do_repair() {
 
 do_undo() {
     local dir="${1:-}" line kind a b
+    [ "$DRY" = 1 ] || guard_not_printing
     [ -n "$dir" ] || dir="$(ls -d "$BACKUP_ROOT"/*/ 2>/dev/null | sort | tail -1)"
     dir="${dir%/}"
     [ -n "$dir" ] && [ -f "$dir/manifest.txt" ] || die_with_fix "there is no backup to restore in $BACKUP_ROOT" "backups are made by ./installer.sh before it changes anything"

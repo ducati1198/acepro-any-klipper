@@ -123,6 +123,19 @@ def check_autosave(path, res):
             return
 
 
+def check_virtual_pins(items, res):
+    """A 'virtual_pin:' pin only works if [virtual_pins] was loaded EARLIER in the config."""
+    loaded = False
+    for path, section, opt, val, no in items:
+        if opt is None and section == "virtual_pins":
+            loaded = True
+        elif opt is not None and val and "virtual_pin:" in val and not loaded:
+            res.errors.append("%s:%d  uses a virtual_pin before [virtual_pins] is loaded, so Klipper will say "
+                              "\"Unknown pin chip name 'virtual_pin'\". Add [virtual_pins] near the top of printer.cfg, "
+                              "above the first file that uses one." % (path, no))
+            return
+
+
 def check_jinja(items, res):
     if jinja2 is None:
         res.notes.append("Jinja2 not installed: G-code templates were not syntax-checked")
@@ -208,6 +221,7 @@ def main():
         return 1
     items = collect(args.printer_cfg, res)
     check_autosave(args.printer_cfg, res)
+    check_virtual_pins(items, res)
     check_jinja(items, res)
     check_duplicates(items, res)
     check_consistency(merged(items), res, args.profile)

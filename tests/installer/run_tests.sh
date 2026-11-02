@@ -197,6 +197,54 @@ B="$(ls "$H"/acepro-support-*.tar.gz 2>/dev/null | head -1)"
 check "bundle created"                               test -n "$B"
 check "secret removed from the bundle"               test -z "$(tar -xzOf "$B" 2>/dev/null | grep SUPERSECRET123)"
 
+echo "16. One ACE temperature sensor per unit"
+for n in 1 2 3; do
+    H="$(new_home t16_$n)"; C="$(cfg "$H")"
+    inst "$H" "1\n$n\nPA4\nn\nn\nn\ny\ny\nn\nn\ny\n"
+    live="$(grep -c '^\[temperature_sensor acepro_temp_' "$C/acepro_setting.cfg")"
+    check "$n unit(s): $n live temperature sensor(s)"  test "$live" -eq "$n"
+    check "$n unit(s): validator passes"                python3 -I "$REPO/tools/validate_config.py" "$C/printer.cfg" --profile klipper
+done
+
+echo "17. Refuses to run while printing"
+H="$(new_home t17)"
+OUT="$(printf '%b' "$A_KLIPPER" | ACE_PRINT_STATE=printing ACE_INSTALL_HOME="$H" ACE_INSTALLER_TEST=1 bash "$REPO/installer.sh" 2>&1)"; RC=$?
+check "exits with an error"                          test "$RC" -ne 0
+check "says a print is running"                      grep -q "print is printing" <<<"$OUT"
+check "changed nothing"                              test ! -e "$(cfg "$H")/acepro.cfg"
+OUT="$(ACE_PRINT_STATE=paused ACE_INSTALL_HOME="$H" ACE_INSTALLER_TEST=1 bash "$REPO/installer.sh" --check 2>&1)"
+check "--check still works while printing"           bash -c '! grep -q "a print is" <<<"$0"' "$OUT"
+
+echo "18. ACE USB warning"
+H="$(new_home t18)"
+OUT="$(printf '%b' "$A_KLIPPER" | ACE_USB_LIST="nothing here" ACE_INSTALL_HOME="$H" ACE_INSTALLER_TEST=1 bash "$REPO/installer.sh" 2>&1)"; RC=$?
+check "warns but still installs"                     bash -c 'test "$0" -eq 0 && grep -q "do not see an ACE" <<<"$1"' "$RC" "$OUT"
+H="$(new_home t18b)"
+OUT="$(printf '%b' "$A_KLIPPER" | ACE_USB_LIST="Bus 001 Device 004: ID 28e9:018a ACE" ACE_INSTALL_HOME="$H" ACE_INSTALLER_TEST=1 bash "$REPO/installer.sh" 2>&1)"
+check "no warning when found"                        bash -c '! grep -q "do not see an ACE" <<<"$0"' "$OUT"
+
+echo "19. Folder layouts"
+H="$ROOT/t19m"; mkdir -p "$H/klipper/klippy/extras" "$H/printer_1_data/config" "$H/printer_2_data/config"
+printf '[stepper_x]\nstep_pin: PB13\n' > "$H/printer_2_data/config/printer.cfg"
+inst "$H" "2\n1\n2\nPA4\nn\nn\nn\ny\ny\nn\nn\ny\n"
+check "multi-instance: second printer chosen"        test -f "$H/printer_2_data/config/acepro.cfg"
+check "multi-instance: first printer untouched"      test ! -e "$H/printer_1_data/config/acepro.cfg"
+H="$ROOT/t19k"; K="$ROOT/t19k_usr"; mkdir -p "$H" "$K/klipper/klippy/extras" "$K/printer_data/config"
+printf '[stepper_x]\nstep_pin: PB13\n' > "$K/printer_data/config/printer.cfg"
+OUT="$(printf '%b' "$A_KLIPPER" | ACE_K1_ROOT="$K" ACE_INSTALL_HOME="$H" ACE_INSTALLER_TEST=1 bash "$REPO/installer.sh" 2>&1)"; RC=$?
+check "K1 native: installed"                         test -f "$K/printer_data/config/acepro.cfg"
+check "K1 native: marked experimental"               grep -q "experimental" <<<"$OUT"
+
+echo "20. Virtual pin used before [virtual_pins]"
+H="$(new_home t20)"; C="$(cfg "$H")"
+printf '[output_pin foo]\npin: virtual_pin:foo\n' > "$C/early.cfg"
+printf '[include early.cfg]\n' | cat - "$C/printer.cfg" > "$C/p.new" && mv "$C/p.new" "$C/printer.cfg"
+printf '[virtual_pins]\n' > "$ROOT/vp_ok.cfg"
+check "validator flags it"                           bash -c 'python3 -I "$0/tools/validate_config.py" "$1/printer.cfg" | grep -q "before \[virtual_pins\]"' "$REPO" "$C"
+# The installer puts acepro.cfg (which loads [virtual_pins]) first, so the fresh install fixes it by itself:
+inst "$H" "$A_KLIPPER"
+check "after install the order is fine"              bash -c '! python3 -I "$0/tools/validate_config.py" "$1/printer.cfg" | grep -q "before \[virtual_pins\]"' "$REPO" "$C"
+
 echo
 echo "14. [force_move] already in another file is not added twice"
 H="$(new_home t14)"; C="$(cfg "$H")"
