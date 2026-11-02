@@ -1,5 +1,7 @@
 # Fluidd ACE Pro panel
 
+> **⚠️ Use at your own risk.** This project is provided "as is", without warranty of any kind. The author and contributors are **not responsible for any damage** to your printer, ACE Pro units, electronics, prints or anything else, or for any injury or loss, caused by using or misusing these files. See the [Disclaimer](../README.md#disclaimer-use-at-your-own-risk).
+
 Fluidd v1.37.7 with an ACE Pro panel for this driver:
 
 - **ACE Pro card** on the dashboard in four layouts (cards, compact strip, spool rack, table): every unit

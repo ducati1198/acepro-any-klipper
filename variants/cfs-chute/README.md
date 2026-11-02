@@ -1,5 +1,7 @@
 # CFS purge chute variant (K1 Max) — NOT TESTED on any K1 series printer
 
+> **⚠️ Use at your own risk.** This project is provided "as is", without warranty of any kind. The author and contributors are **not responsible for any damage** to your printer, ACE Pro units, electronics, prints or anything else, or for any injury or loss, caused by using or misusing these files. See the [Disclaimer](../../README.md#disclaimer-use-at-your-own-risk).
+
 > ## ⚠️ Read this first: untested, use at your own risk
 >
 > This is a separate set of ACE Pro files for a **K1 Max with the factory CFS purge chute** instead of a servo poop bucket.

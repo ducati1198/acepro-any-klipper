@@ -1,5 +1,7 @@
 # Simple AF profile
 
+> **⚠️ Use at your own risk.** This project is provided "as is", without warranty of any kind. The author and contributors are **not responsible for any damage** to your printer, ACE Pro units, electronics, prints or anything else, or for any injury or loss, caused by using or misusing these files. See the [Disclaimer](../../README.md#disclaimer-use-at-your-own-risk).
+
 What the installer does differently on Simple AF (Pellcorp):
 
 - `PAUSE` and `RESUME` come with the shared `acepro_printer_macros.cfg` like on every profile. Simple AF's `client.cfg` defines them too; the file loaded last wins, and on Simple AF that is `client.cfg`, so the printer's own versions stay in charge. `my_saf_hooks.cfg` gets `_SAF_ON_PAUSE` / `_SAF_ON_RESUME`, which run the ACE steps only while the `ACE_Pro` switch is on.

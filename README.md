@@ -20,6 +20,7 @@ Tuned and tested on a **Creality K1 Max** (Raspberry Pi 5, Kalico, Fluidd, Klipp
 
 ## Contents
 
+0. [Disclaimer: use at your own risk](#disclaimer-use-at-your-own-risk)
 1. [What you get](#1-what-you-get)
 2. [Hardware and wiring](#2-hardware-and-wiring)
 3. [Install](#3-install)
@@ -37,6 +38,19 @@ Tuned and tested on a **Creality K1 Max** (Raspberry Pi 5, Kalico, Fluidd, Klipp
 15. [CFS purge chute variant (K1 Max, untested)](#15-cfs-purge-chute-variant-k1-max-untested)
 16. [Repository layout](#16-repository-layout)
 17. [Credits and license](#17-credits-and-license)
+
+---
+
+## Disclaimer: use at your own risk
+
+This project is provided **"as is"**, without warranty of any kind, express or implied (see also the GPL v3 licence, sections 15 and 16).
+
+- **Use it at your own risk.** You are responsible for what runs on your printer.
+- **I am not responsible for any damage** to your printer, ACE Pro units, electronics, hotend, build plate, prints or other property, or for any injury, fire or loss, caused by these files, the installer or the instructions.
+- **Check your printer's specifications** (axis limits, temperatures, speeds, pin names) before using any value from this project. Positions and settings are tuned for one printer and may be wrong for yours.
+- **Test in small steps**, with the printer empty, your hand near the emergency stop, and watch the first moves. Never leave a new setup unattended.
+- Back up your config first. The installer makes backups and supports `--undo`, but you are responsible for keeping your own copies.
+- This project is not made by or affiliated with Anycubic, Creality or any other manufacturer. Product names belong to their owners.
 
 ---
 
