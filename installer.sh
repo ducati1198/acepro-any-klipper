@@ -678,6 +678,31 @@ show_plan() {
 # Update manager entry (Fluidd / Mainsail "Software Updates") and "what changed"
 # ============================================================================
 
+# Fluidd macro category "ACEPRO MACRO" (a display setting in Moonraker's database; nothing in your config changes)
+fluidd_macros_url() { # prints the Moonraker URL to use, or nothing when we must not touch it
+    if [ -n "${ACE_MOONRAKER_URL:-}" ]; then echo "$ACE_MOONRAKER_URL"; return; fi
+    [ "$TESTING" = 1 ] && return 0
+    echo "$MOONRAKER_URL"
+}
+
+setup_fluidd_category() {
+    local url f names=() n out bk
+    url="$(fluidd_macros_url)"; [ -n "$url" ] || return 0
+    for f in "$CONFIG_DIR"/acepro*.cfg "$CONFIG_DIR/cut_calibrate.cfg" "$CONFIG_DIR/spoolman_logic.cfg"; do
+        [ -f "$f" ] || continue
+        while IFS= read -r n; do names+=("$n"); done < <(sed -nE 's/^\[gcode_macro[[:space:]]+([^_[:space:]][^]]*)\][[:space:]]*(#.*)?$/\1/p' "$f")
+    done
+    [ "${#names[@]}" -gt 0 ] || return 0
+    bk="$BACKUP_DIR/fluidd-macros.json"
+    out="$(python3 -I "$SCRIPT_DIR/tools/fluidd_macros.py" add "$url" "$bk" "${names[@]}" 2>&1)" || {
+        print_info "Could not reach Moonraker, so the Fluidd macro category was skipped (it is only a colour and a group)."; return 0; }
+    case "$out" in
+        SKIP*) print_info "Fluidd macro category skipped: ${out#SKIP }" ;;
+        *) [ -f "$bk" ] && echo "FLUIDDDB $bk $url" >> "$BACKUP_DIR/manifest.txt"
+           print_success "Fluidd: ACE macros are in their own category, ACEPRO MACRO (${out#OK })" ;;
+    esac
+}
+
 ensure_update_manager() {
     local mc="$CONFIG_DIR/moonraker.conf" origin
     [ -f "$mc" ] || { print_info "No moonraker.conf here, so no entry in Software Updates."; return 0; }
@@ -1176,6 +1201,7 @@ do_install() {
     [ -f "$(CONF_FILE)" ] && backup_path "$(CONF_FILE)" || echo "NEW $(CONF_FILE)" >> "$BACKUP_DIR/manifest.txt"
     save_answers
     ensure_update_manager
+    setup_fluidd_category
     check_virtual_pin_order || true
 
     local stale; stale="$(stale_backup_links)"
@@ -1258,7 +1284,7 @@ remove_link() { # path label
 }
 
 do_uninstall() {
-    local f x saved plan=() ks ksconf tpl hooks_plan="" hooks_gone=0 tmp
+    local f x saved plan=() ks ksconf tpl hooks_plan="" hooks_gone=0 tmp out
     guard_not_printing
     find_dirs
     saved="$(kv_get "$(CONF_FILE)" PROFILE || true)"
@@ -1273,6 +1299,7 @@ do_uninstall() {
     is_symlink "$ks" && echo "  LINK   $ks"
     grep -q 'menu __main acepro\]\|menu __print acepro\]' "$ksconf" 2>/dev/null && echo "  EDIT   KlipperScreen.conf (the ACE Pro menu entries)"
     include_present && echo "  EDIT   printer.cfg (the [include acepro.cfg] line)"
+    [ -n "$(fluidd_macros_url)" ] && echo "  EDIT   Fluidd macro settings (the ACEPRO MACRO category goes; its macros go back to Uncategorized)"
     grep -qE '^\[update_manager[[:space:]]+acepro\]' "$CONFIG_DIR/moonraker.conf" 2>/dev/null && echo "  EDIT   moonraker.conf (the [update_manager acepro] entry)"
     if [ "$SAF_HOOKS" = "yes" ] && [ -f "$CONFIG_DIR/$HOOKS_FILE" ]; then
         tpl="$(profile_file my_saf_hooks.cfg)"
@@ -1312,6 +1339,11 @@ do_uninstall() {
         fi
     fi
     remove_include_lines "$CONFIG_DIR/printer.cfg"
+    local murl; murl="$(fluidd_macros_url)"
+    if [ -n "$murl" ] && out="$(python3 -I "$SCRIPT_DIR/tools/fluidd_macros.py" remove "$murl" "$BACKUP_DIR/fluidd-macros.json" 2>&1)"; then
+        [ -f "$BACKUP_DIR/fluidd-macros.json" ] && echo "FLUIDDDB $BACKUP_DIR/fluidd-macros.json $murl" >> "$BACKUP_DIR/manifest.txt"
+        case "$out" in OK*) print_success "Removed the ACEPRO MACRO category from Fluidd" ;; esac
+    fi
     if grep -qE '^\[update_manager[[:space:]]+acepro\]' "$CONFIG_DIR/moonraker.conf" 2>/dev/null; then
         backup_path "$CONFIG_DIR/moonraker.conf"
         cfg_tool rmsection "$CONFIG_DIR/moonraker.conf" "update_manager acepro" && print_success "Removed acepro from Software Updates"
@@ -1525,6 +1557,7 @@ do_undo() {
             MOD)  mkdir -p "$(dirname "$a")"; rm -rf "$a"; cp -a "$dir/files$a" "$a" && print_success "Restored $a" ;;
             NEW)  rm -rf "$a" && print_success "Removed $a (it was new)" ;;
             LINK) b="${a#* }"; a="${a%% *}"; rm -f "$a"; [ "$b" != "-" ] && ln -s "$b" "$a"; print_success "Link $a put back" ;;
+            FLUIDDDB) b="${a#* }"; a="${a%% *}"; python3 -I "$SCRIPT_DIR/tools/fluidd_macros.py" restore "$b" "$a" >/dev/null 2>&1 && print_success "Fluidd macro settings put back" || print_warning "Could not put the Fluidd macro settings back (Moonraker not reachable)" ;;
             FLUIDD) b="${a#* }"; a="${a%% *}"; if [ -d "$b" ]; then rm -rf "$a" && cp -a "$b" "$a" && print_success "Fluidd restored from $b"; fi ;;
         esac
     done < <(tac "$dir/manifest.txt")

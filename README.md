@@ -743,6 +743,10 @@ cd acepro-any-klipper && ./installer.sh --update
 
 `--update` takes the new code and keeps your values: positions, speeds, sensor pins, the servo pin and which optional parts you left out. It also moves a `[servo servo_wipe]` section or `PAUSE` / `RESUME` from an older single-file install into the new files. If you edited the *code* of a macro (not just its values), that edit is not carried over; your old file is in the backup. The installer tells you when a newer version is on GitHub.
 
+### Fluidd macro category
+
+The installer puts the ACE macros into their own Fluidd category, **ACEPRO MACRO**, coloured hot pink (`#ff00aa`), so they are easy to find. Macros you already sorted into another category stay there; macros whose names start with `_` are hidden by Fluidd anyway. It is a display setting kept in Moonraker's database, so no config file changes. The old settings are saved first, `--uninstall` removes the category (its macros go back to Uncategorized), and `--undo` puts the old settings back. If Moonraker cannot be reached the step is skipped.
+
 ### Software Updates and "what changed"
 
 The installer adds `[update_manager acepro]` to `moonraker.conf` (saved first), so the repo shows up in Fluidd's Software Updates page and you can pull new driver code there. On Simple AF it asks first, because Simple AF may overwrite `moonraker.conf`. The page only downloads code; run `./installer.sh --update` afterwards to refresh the config files. After `--update` the installer prints the `CHANGELOG.md` entries newer than the version you had.

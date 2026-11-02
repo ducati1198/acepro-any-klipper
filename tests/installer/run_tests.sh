@@ -337,6 +337,28 @@ printf '[server]\nhost: 0.0.0.0\n' > "$C/moonraker.conf"
 inst "$H" '3\n1\nPA4\nn\ny\nPF1\ny\nPB14\ny\ny\nn\nn\ny\ny\nn\n'
 check "Simple AF: asked first, said no, nothing added" test -z "$(grep 'update_manager acepro' "$C/moonraker.conf")"
 
+echo "26. Fluidd macro category"
+H="$(new_home t26)"; C="$(cfg "$H")"
+printf '{"categories":[{"id":"c1","name":"FILAMENT"}],"stored":[{"alias":"","visible":true,"disabledWhilePrinting":false,"color":"#ff7c00","categoryId":"c1","name":"LOAD_FILAMENT"}],"expanded":[]}' > "$ROOT/db26.json"
+cp "$ROOT/db26.json" "$ROOT/db26.orig"
+python3 "$REPO/tests/installer/fake_moonraker.py" "$ROOT/db26.json" "$ROOT/port26" & FAKE=$!
+for i in 1 2 3 4 5 6 7 8 9 10; do [ -s "$ROOT/port26" ] && break; sleep 0.3; done
+MURL="http://127.0.0.1:$(cat "$ROOT/port26")"
+OUT="$(printf '%b' "$A_KLIPPER" | ACE_MOONRAKER_URL="$MURL" ACE_INSTALL_HOME="$H" ACE_INSTALLER_TEST=1 bash "$REPO/installer.sh" 2>&1)"; RC=$?
+check "installer finished"                           test "$RC" -eq 0
+check "category created"                             grep -q '"ACEPRO MACRO"' "$ROOT/db26.json"
+check "CUT_TIP is in it, pink"                       python3 -c "import json,sys; d=json.load(open(sys.argv[1])); c=[x['id'] for x in d['categories'] if x['name']=='ACEPRO MACRO'][0]; m={x['name']:x for x in d['stored']}; sys.exit(0 if m['CUT_TIP']['categoryId']==c and m['CUT_TIP']['color']=='#ff00aa' else 1)" "$ROOT/db26.json"
+check "underscore macros not added"                  bash -c '! grep -q "\"_ACE_VARS\"" "$0"' "$ROOT/db26.json"
+check "your categorised macro untouched"             grep -q '"categoryId": *"c1"' "$ROOT/db26.json"
+OUT="$(printf 'y\n' | ACE_MOONRAKER_URL="$MURL" ACE_INSTALL_HOME="$H" ACE_INSTALLER_TEST=1 bash "$REPO/installer.sh" --uninstall 2>&1)"
+check "uninstall removes the category"               bash -c '! grep -q "ACEPRO MACRO" "$0"' "$ROOT/db26.json"
+OUT="$(printf 'y\n' | ACE_MOONRAKER_URL="$MURL" ACE_INSTALL_HOME="$H" ACE_INSTALLER_TEST=1 bash "$REPO/installer.sh" --undo 2>&1)"
+check "undo puts the category back"                  grep -q '"ACEPRO MACRO"' "$ROOT/db26.json"
+kill $FAKE 2>/dev/null; wait $FAKE 2>/dev/null
+H="$(new_home t26b)"
+inst "$H" "$A_KLIPPER"
+check "no Moonraker in test mode: installs fine"     test "$RC" -eq 0
+
 echo
 echo "14. [force_move] already in another file is not added twice"
 H="$(new_home t14)"; C="$(cfg "$H")"
