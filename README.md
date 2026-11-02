@@ -728,6 +728,19 @@ cd acepro-any-klipper && ./installer.sh --update
 
 `--update` takes the new code and keeps your values: positions, speeds, sensor pins, the servo pin and which optional parts you left out. It also moves a `[servo servo_wipe]` section or `PAUSE` / `RESUME` from an older single-file install into the new files. If you edited the *code* of a macro (not just its values), that edit is not carried over; your old file is in the backup. The installer tells you when a newer version is on GitHub.
 
+### Full snapshot before you try something new
+
+The installer saves what it changes, but if you want a copy of **everything** first (your whole config folder, the driver folder, the Klipper ACE links, Fluidd and the KlipperScreen panel), run:
+
+```bash
+cd ~/acepro-any-klipper
+./tools/full_backup.sh            # make a snapshot (changes nothing on the printer)
+./tools/full_backup.sh --list     # show your snapshots
+./tools/full_backup.sh --restore  # put the newest snapshot back (asks first)
+```
+
+Snapshots are in `~/acepro-fullbackup/<date>/` (about 40 MB each). Restore never deletes anything: your current folders are renamed `*.before-restore-<date>` next to the originals, so you can still look at them. Copy the snapshot folder to your computer with SFTP if you want a second copy.
+
 ### Undo
 
 Every install and update first saves what it will change in `~/acepro-backup/<date>/`. To put it back:
