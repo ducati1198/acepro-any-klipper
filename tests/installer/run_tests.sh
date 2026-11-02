@@ -101,6 +101,7 @@ check "profile detected as Simple AF"                grep -q "found Simple AF" <
 check "ACE PAUSE/RESUME present on every profile"    grep -q '^\[gcode_macro PAUSE\]' "$C/acepro_printer_macros.cfg"
 check "hooks file NOT written (you have hooks)"      test ! -e "$C/acepro_saf_hooks.cfg"
 check "hook lines to add are shown"                  grep -q "_SAF_ON_CANCEL" <<<"$OUT"
+check "pause/resume hook lines are shown"            grep -q "_ACE_ON_RESUME" <<<"$OUT"
 check "your hooks file untouched"                    test "$(cat "$C/my_saf_hooks.cfg")" = "$(printf '[gcode_macro _SAF_START_PRINT_END]\ngcode:\n  M117 hi')"
 check "moonraker.conf not created"                   test ! -e "$C/moonraker.conf"
 check "validator passes (saf)"                       python3 -I "$REPO/tools/validate_config.py" "$C/printer.cfg" --profile saf
@@ -111,6 +112,7 @@ H="$(new_home t7)"; C="$(cfg "$H")"; mkdir -p "$H/pellcorp"
 inst "$H" '3\n1\nPA4\nn\nn\ny\nPB14\ny\ny\nn\nn\ny\n'
 check "installer finished"                           test "$RC" -eq 0
 check "acepro_saf_hooks.cfg written"                 test -f "$C/acepro_saf_hooks.cfg"
+check "pause/resume hooks call the ACE steps"        bash -c 'grep -q _ACE_ON_PAUSE "$0" && grep -q _ACE_ON_RESUME "$0"' "$C/acepro_saf_hooks.cfg"
 check "validator passes (saf)"                       python3 -I "$REPO/tools/validate_config.py" "$C/printer.cfg" --profile saf
 
 echo "8. Update keeps your settings"

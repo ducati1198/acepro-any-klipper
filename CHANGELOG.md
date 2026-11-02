@@ -8,6 +8,7 @@
 - **Positions start locked.** The sample cutter / bucket / wipe positions come from a Creality K1 Max, so a new install blocks moves to them until you set `variable_positions_confirmed: True`.
 - **Commands:** `--update` (keeps your values), `--check`, `--repair` (links and includes), `--undo`, `--dry-run`, `--support-bundle`.
 - **Simple AF:** never edits `moonraker.conf`; puts files where its overrides backup finds them; writes the ACE hooks file only when you have no hooks of your own.
+- **Simple AF pause/resume follow the `ACE_Pro` switch** through `_SAF_ON_PAUSE` / `_SAF_ON_RESUME` → `_ACE_ON_PAUSE` / `_ACE_ON_RESUME`. Switch off = plain Simple AF. Simple AF's own PAUSE/RESUME stay in charge.
 - **Servo is optional.** `[servo servo_wipe]` moved to `acepro_servo.cfg`; `servo_enable`, `cutter_enable` and `poop_enable` switch the matching macros off.
 - **PAUSE / RESUME stay in `acepro_printer_macros.cfg`** for all profiles. On Simple AF, `client.cfg` loads later and its versions win.
 - **Fix:** `PUSHOVER_ENCODER_SENSOR` is now defined (does nothing until you define your own), so a sensor alert no longer fails with "Unknown command" on a fresh install.

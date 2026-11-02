@@ -251,6 +251,7 @@ Pick **Simple AF**. The installer follows Simple AF's rules:
 - All files go in the main config folder (not a subfolder), so Simple AF's `pellcorp-overrides` backup keeps them across `installer.sh --update`.
 - It never edits `moonraker.conf` or any other file Simple AF owns.
 - ACE steps for Simple AF's hooks (servo reset, encoder on/off, unload and park on cancel) go into `acepro_saf_hooks.cfg`, **only if you have none of those hooks**. If you already have your own (for example `my_saf_hooks.cfg`), the installer leaves them alone and shows the lines to add. See [`examples/saf_hooks_example.cfg`](examples/saf_hooks_example.cfg).
+- **Pause and resume follow the ACE switch.** Simple AF's `PAUSE` and `RESUME` stay in charge and call two hooks, `_SAF_ON_PAUSE` and `_SAF_ON_RESUME`, which the hooks file points at `_ACE_ON_PAUSE` and `_ACE_ON_RESUME`. With the `ACE_Pro` switch **off** they do nothing (pure Simple AF). With it **on**: on pause the servo is retracted, the filament is retracted a little and the nozzle standby timer starts; on resume the nozzle is reheated, the ACE tool is reloaded if there is no filament at the nozzle (or a tool change was left half done), otherwise the nozzle is purged and wiped over the poop bucket. Simple AF still parks and returns the head itself.
 - A Simple AF update only runs `git reset --hard` on its Klipper copy, so the links usually survive. Run `./installer.sh --repair` afterwards to be sure.
 - Keep the start line `MY_START_PRINT TOOL=... ` (section 5.1). It loads the tool and then runs Simple AF's `START_PRINT`.
 
