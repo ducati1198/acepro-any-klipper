@@ -173,7 +173,7 @@ Important positions in `acepro_macros.cfg`:
 |---|---|---|
 | `cut_block_x / y` | 50 / 304 | Where the cutter sits |
 | `cut_engage_x / y` | 43 / 304 | Where the lever starts to move |
-| `cut_full_x / y` | **34** / 304 | Where the blade is fully closed (never go past this) |
+| `cut_full_x / y` | **33** / 304 | Where the blade is fully closed (never go past this) |
 | `cut_repetitions`, `cut_pause_ms` | 2, 150 | Cutting cycles and pause at the full position |
 | `poop_x / y` | 180.5 / 303 | Waste bucket |
 | `servo_deploy_angle` | 87° | Basket open |
@@ -595,7 +595,7 @@ If the toolhead pushes the cutter lever too far, the X belt can skip teeth. `cut
 3. Run `CUT_CAL_STEP` repeatedly (`STEP=0.2` for finer steps). Each call pushes the lever one step and prints the X value.
 4. Watch the lever. Note the X where it **starts to move** (touch) and where it is **fully pressed** (bottom).
 5. Run `CUT_CAL_END` to back off.
-6. Set `cut_full_x` in `_ACE_VARS` to the **bottom** value (mine is `34`), not further. The macro never steps past `cut_full_x`.
+6. Set `cut_full_x` in `_ACE_VARS` to the **bottom** value (mine is `33`), not further. The macro never steps past `cut_full_x`.
 7. Test with `CUT_TIP` and listen for belt noise.
 
 The cut itself does a pre-cut retract (`pre_cut_retract_length`, 2 mm, done in relative mode so it is safe with absolute-extrusion files), then cuts `cut_repetitions` times with a `cut_pause_ms` pause at the end of each stroke.
