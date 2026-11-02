@@ -880,7 +880,6 @@ acepro-any-klipper/
 ├── tests/                        Driver tests (pytest) and installer tests (tests/installer/run_tests.sh)
 ├── docs/HARDWARE.md              Parts, ACE USB adapter wiring, pinouts
 ├── docs/img/                     Screenshots and diagrams used in this README
-└── img/                          Upstream screenshots (not used in this README)
 ```
 
 ---
