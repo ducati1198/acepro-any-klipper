@@ -34,8 +34,9 @@ Tuned and tested on a **Creality K1 Max** (Raspberry Pi 5, Kalico, Fluidd, Klipp
 12. [Connection supervision](#12-connection-supervision)
 13. [Update and undo](#13-update-and-undo)
 14. [Troubleshooting](#14-troubleshooting)
-15. [Repository layout](#15-repository-layout)
-16. [Credits and license](#16-credits-and-license)
+15. [CFS purge chute variant (K1 Max, untested)](#15-cfs-purge-chute-variant-k1-max-untested)
+16. [Repository layout](#16-repository-layout)
+17. [Credits and license](#17-credits-and-license)
 
 ---
 
@@ -851,7 +852,22 @@ If your ACE and MCUs disappear after an OS update, check `dmesg | grep -i xhci` 
 
 ---
 
-## 15. Repository layout
+## 15. CFS purge chute variant (K1 Max, untested)
+
+For a K1 Max with the factory **CFS purge chute** (no servo bucket) there is a separate, optional set of files in [`variants/cfs-chute/`](variants/cfs-chute/). **It has not been tested outside one K1 Max and has not been run through the installer.** It is not installed or changed by `installer.sh`, and nothing in `config/` depends on it.
+
+What it does: after the cut the head approaches the chute from Y287 and creeps in, purges, retracts 2 mm, shakes the chute (`HIT_PURGE_CHUTE`), wipes the nozzle on the silicone flap (`WIPE_ON_CHUTE_FLAP`), then backs out slowly. It is based on the author's printer and on [swilsonnc/ACEPROK1Max](https://github.com/swilsonnc/ACEPROK1Max).
+
+- **Use it instead of** `acepro.cfg`: change `[include acepro.cfg]` to `[include cfs_acepro.cfg]` in `printer.cfg`. Never include both.
+- **Positions start locked** (`variable_positions_confirmed: False`). Every number is a K1 Max number. A K1 or K1C has a smaller bed and cannot reach them: measure everything yourself.
+- It is an older base than `config/`: no Simple AF pause/resume switch, no hooks file, no hardware switches.
+- After switching, `./installer.sh --repair` and `--doctor` will offer to add `[include acepro.cfg]` back. Say no.
+
+Full details, the position table, a first-run checklist and notes: [`variants/cfs-chute/README.md`](variants/cfs-chute/README.md).
+
+---
+
+## 16. Repository layout
 
 ```
 acepro-any-klipper/
@@ -874,6 +890,7 @@ acepro-any-klipper/
 │   ├── kalico/                   Same as klipper, plus the heater `control:` check
 │   └── saf/                      Simple AF: hooks file, notes (no PAUSE / RESUME)
 ├── examples/                     Not installed: servo_wiper.cfg, saf_hooks_example.cfg
+├── variants/cfs-chute/           Optional, untested: ACE files for a K1 Max with the CFS purge chute (not installed by installer.sh)
 ├── fluidd/                       Fluidd 1.37.7 build + patch (ACE panel, spool picker)
 ├── orca_plugin/                  OrcaSlicer 2.5 "ACE Spool Mapper"
 ├── KlipperScreen/acepro.py       KlipperScreen panel
@@ -888,7 +905,7 @@ acepro-any-klipper/
 
 ---
 
-## 16. Credits and license
+## 17. Credits and license
 
 Built on the work of:
 
@@ -896,6 +913,7 @@ Built on the work of:
 - [szkrisz/ACEPROSV08](https://github.com/szkrisz/ACEPROSV08)
 - [utkabobr/DuckACE](https://github.com/utkabobr/DuckACE)
 - [agrloki/ValgACE](https://github.com/agrloki/ValgACE)
+- [swilsonnc/ACEPROK1Max](https://github.com/swilsonnc/ACEPROK1Max) (the K1 Max with CFS reference used for the chute variant)
 
 Config files organized and maintained by **ducati1198**.
 
