@@ -14,6 +14,5 @@
 - **PAUSE / RESUME stay in `acepro_printer_macros.cfg`** for all profiles. On Simple AF, `client.cfg` loads later and its versions win.
 - **Fix:** `PUSHOVER_ENCODER_SENSOR` is now defined (does nothing until you define your own), so a sensor alert no longer fails with "Unknown command" on a fresh install.
 - **Fix:** removed the `SMART_TOOL` branch from `MY_START_PRINT`; the macro never existed.
-- **`tools/full_backup.sh`**: full snapshot of config, driver folder, Klipper links, Fluidd and KlipperScreen panel, with `--list` and `--restore`.
 - **Examples (not installed):** `examples/servo_wiper.cfg`, `examples/saf_hooks_example.cfg`.
 - **Tests:** `bash tests/installer/run_tests.sh` runs the installer against fake folders.

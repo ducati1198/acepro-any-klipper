@@ -186,17 +186,5 @@ check "bundle created"                               test -n "$B"
 check "secret removed from the bundle"               test -z "$(tar -xzOf "$B" 2>/dev/null | grep SUPERSECRET123)"
 
 echo
-echo "13. Full snapshot and restore"
-H="$(new_home t13)"; C="$(cfg "$H")"; mkdir -p "$H/acepro-any-klipper/tools" "$H/acepro-any-klipper/extras/ace" "$H/KlipperScreen/panels"
-echo old > "$H/acepro-any-klipper/extras/ace/a.py"; ln -s "$H/acepro-any-klipper/extras/ace" "$H/klipper/klippy/extras/ace"
-fb() { ACE_INSTALL_HOME="$H" ACE_REPO_DIR="$H/acepro-any-klipper" ACE_NO_SYSTEMCTL=1 ACE_INSTALLER_TEST=1 bash "$REPO/tools/full_backup.sh" "$@"; }
-cp "$C/printer.cfg" "$ROOT/t13.before"
-fb >/dev/null; check "snapshot made"                 test -f "$(ls -d "$H"/acepro-fullbackup/*/ | head -1)config.tar.gz"
-echo changed > "$C/printer.cfg"; echo new > "$H/acepro-any-klipper/extras/ace/a.py"
-fb --restore >/dev/null
-check "config restored exactly"                      cmp -s "$C/printer.cfg" "$ROOT/t13.before"
-check "driver folder restored"                       test "$(cat "$H/acepro-any-klipper/extras/ace/a.py")" = "old"
-check "current config kept aside"                    test -n "$(ls -d "$H"/printer_data/config.before-restore-* 2>/dev/null)"
-
 echo "Passed: $PASS   Failed: $FAIL"
 [ "$FAIL" -eq 0 ]
