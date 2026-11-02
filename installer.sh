@@ -69,7 +69,10 @@ STAGE=""
 BACKUP_DIR=""
 MOONRAKER_RESTART_NEEDED=0
 FLUIDD_DIR=""
-HOOKS_CONFLICT=0
+HOOKS_INCLUDE="auto"      # auto = installer adds the include line, manual = you add it in Fluidd, present = already included
+HOOKS_FILE="my_saf_hooks.cfg"
+HOOKS_SUMMARY=""          # what the installer changes in my_saf_hooks.cfg (shown in the plan)
+HOOKS_ELSEWHERE=""        # hook macros that are defined in another file (not touched)
 declare -a PROFILE_CHAIN=()
 declare -a WARNINGS=()
 
@@ -319,6 +322,48 @@ check_pi5_usb_hat() {
 # Questions 2 to 5 (fresh install)
 # ============================================================================
 
+# Simple AF hooks file (my_saf_hooks.cfg). If you have one, it is UPDATED: your lines stay, the ACE lines
+# are added at the top of each hook macro. If you have none, a new one is written.
+hooks_included_by() { # -> file that already includes my_saf_hooks.cfg (empty if none)
+    grep -lE '^[[:space:]]*\[include[[:space:]]+(\./)?my_saf_hooks\.cfg\]' "$CONFIG_DIR"/*.cfg 2>/dev/null | head -1
+}
+
+hooks_defined_elsewhere() { # -> "name,name" of hook macros that another file already defines
+    local name f out=""
+    for name in $(cfg_tool hooknames "$(profile_file my_saf_hooks.cfg)"); do
+        for f in "$CONFIG_DIR"/*.cfg; do
+            [ -f "$f" ] || continue
+            case "$(basename "$f")" in "$HOOKS_FILE"|printer-*.cfg|*.backup*) continue ;; esac
+            if grep -qE "^\[gcode_macro[[:space:]]+$name\]" "$f"; then out="$out,$name"; break; fi
+        done
+    done
+    echo "${out#,}"
+}
+
+ask_hooks_include() {
+    [ "$PROFILE" = "saf" ] || return 0
+    local by; by="$(hooks_included_by)"
+    print_header "5b · Simple AF hooks ($HOOKS_FILE)"
+    echo "Simple AF can run your own steps at set moments (homing, start, end, pause, resume, cancel)."
+    if [ -f "$CONFIG_DIR/$HOOKS_FILE" ]; then
+        echo "You already have $HOOKS_FILE. The installer will UPDATE it: your own lines stay as they are,"
+        echo "and the ACE lines are added at the top of each hook (the encoder lines only if you have that sensor)."
+    else
+        echo "The installer will write $HOOKS_FILE with the ACE steps for those moments."
+    fi
+    if [ -n "$by" ]; then
+        HOOKS_INCLUDE=present
+        print_info "$(basename "$by") already includes $HOOKS_FILE, nothing to add to printer.cfg."
+        return 0
+    fi
+    why "the file only takes effect when printer.cfg includes it."
+    if ask_yn "Let the installer add [include $HOOKS_FILE] to printer.cfg?" Y "choose no to add the line yourself in Fluidd (the installer will tell you where)."; then
+        HOOKS_INCLUDE=auto
+    else
+        HOOKS_INCLUDE=manual
+    fi
+}
+
 ask_hardware() {
     local cur_nozzle=""
     print_header "2 of 7 · Your ACE Pro"
@@ -359,6 +404,7 @@ ask_hardware() {
     fi
     ask_yn "Add the Spoolman helpers?" N "only if you use Spoolman." && WANT_SPOOLMAN=1
     ask_yn "Add the cutter calibration macros (CUT_CAL_START ...)?" N "helps you find where the cutter closes." && WANT_CUTCAL=1
+    ask_hooks_include
 }
 
 # ============================================================================
@@ -374,21 +420,17 @@ stage_files() {
         cp "$SCRIPT_DIR/config/$f" "$STAGE/$f"
     done
 
-    # Simple AF hooks: only when you have none of these hook macros anywhere
+    # Simple AF hooks: update your my_saf_hooks.cfg (or write a new one). The encoder lines stay only
+    # if you have the ACE encoder sensor.
+    HOOKS_SUMMARY=""; HOOKS_ELSEWHERE=""
     if [ "$SAF_HOOKS" = "yes" ]; then
-        local hookfile existing
-        hookfile="$(profile_file acepro_saf_hooks.cfg)"
-        if [ -f "$(OLD acepro_saf_hooks.cfg)" ]; then
-            cp "$hookfile" "$STAGE/acepro_saf_hooks.cfg"            # ours from an earlier install: refresh it
-        else
-            existing="$(grep -lE '^\[gcode_macro[[:space:]]+_SAF_[A-Z_]+\]' "$CONFIG_DIR"/*.cfg 2>/dev/null \
-                        | grep -v -E '/(acepro_saf_hooks|printer-[^/]*)\.cfg$|\.backup' || true)"
-            if [ -n "$existing" ]; then
-                HOOKS_CONFLICT=1
-            else
-                cp "$hookfile" "$STAGE/acepro_saf_hooks.cfg"
-            fi
+        local enc=$HAVE_ENCODER cur="-"
+        if [ "$UPDATING" = 1 ]; then
+            enc=0; grep -qE '^\[filament_motion_sensor ace_encoder\]' "$(OLD acepro.cfg)" 2>/dev/null && enc=1
         fi
+        [ -f "$CONFIG_DIR/$HOOKS_FILE" ] && cur="$CONFIG_DIR/$HOOKS_FILE"
+        HOOKS_ELSEWHERE="$(hooks_defined_elsewhere)"
+        HOOKS_SUMMARY="$(cfg_tool hooks "$(profile_file my_saf_hooks.cfg)" "$cur" "$STAGE/$HOOKS_FILE" "$enc" "$HOOKS_ELSEWHERE")"
     fi
 
     [ "$WANT_SPOOLMAN" = 1 ] && cp "$SCRIPT_DIR/config/spoolman_logic.cfg" "$STAGE/spoolman_logic.cfg"
@@ -497,7 +539,15 @@ show_plan() {
     echo "  LINK    $KLIPPER_DIR/klippy/extras/ace → $SCRIPT_DIR/extras/ace"
     if [ "$PROFILE" = "saf" ]; then
         echo "  SKIP    moonraker.conf (never touched on Simple AF)"
-        [ "$HOOKS_CONFLICT" = 1 ] && echo "  SKIP    ACE hooks file (you already have SAF hooks; the lines to add are shown at the end)"
+        local hl
+        if [ -n "$HOOKS_SUMMARY" ]; then
+            while IFS= read -r hl; do [ -n "$hl" ] && echo "            $HOOKS_FILE: $hl"; done <<<"$HOOKS_SUMMARY"
+        fi
+        case "$HOOKS_INCLUDE" in
+            auto)   grep -qF "[include $HOOKS_FILE]" "$CONFIG_DIR/printer.cfg" 2>/dev/null || echo "  EDIT    printer.cfg (+ [include $HOOKS_FILE] below the ACE include)" ;;
+            manual) echo "  NOTE    you add [include $HOOKS_FILE] to printer.cfg yourself (Fluidd)" ;;
+        esac
+        [ -n "$HOOKS_ELSEWHERE" ] && echo "  NOTE    hooks defined in another file are not touched: $HOOKS_ELSEWHERE"
     fi
     [ "$WANT_FLUIDD" = 1 ] && echo "  PANEL   Fluidd ACE panel (old Fluidd saved as ${FLUIDD_DIR}_backup_*)"
     [ "$WANT_KS" = 1 ] && echo "  PANEL   KlipperScreen ACE menu"
@@ -753,15 +803,20 @@ final_steps() {
 
 What to do next
 EOF
-    if [ "$PROFILE" = "saf" ] && [ "$HOOKS_CONFLICT" = 1 ]; then
-        cat <<EOF
- $n. Add these ACE lines to the hooks you already have (full text: examples/saf_hooks_example.cfg):
-      _SAF_START_PRINT_END   ->  SFS_ENABLE_ACE_ENCODER
-      _SAF_END_PRINT_START   ->  SFS_DISABLE_ACE_ENCODER, then _UNLOAD_TOOL_PRINT if AUTO_UNLOAD is on
-      _SAF_ON_CANCEL         ->  SFS_DISABLE_ACE_ENCODER, _UNLOAD_TOOL_PRINT, PARK_FOR_CANCEL
-      _SAF_ON_PAUSE          ->  _ACE_ON_PAUSE
-      _SAF_ON_RESUME         ->  _ACE_ON_RESUME
-EOF
+    if [ "$PROFILE" = "saf" ] && [ "$HOOKS_INCLUDE" = "manual" ] && [ -z "$(hooks_included_by)" ]; then
+        cat <<EOT
+ $n. Add this line to printer.cfg (Fluidd: Configuration, printer.cfg), right below [include acepro.cfg]:
+      [include $HOOKS_FILE]
+    Until you do, the Simple AF hooks (encoder, servo, pause, resume, cancel) do not run.
+EOT
+        n=$((n+1))
+    fi
+    if [ "$PROFILE" = "saf" ] && [ -n "$HOOKS_ELSEWHERE" ]; then
+        local hn
+        echo " $n. These hooks are defined in another file, so the installer did not touch them. Add the ACE lines there yourself:"
+        for hn in ${HOOKS_ELSEWHERE//,/ }; do
+            echo "      $hn  ->  $(cfg_tool hookcmds "$(profile_file my_saf_hooks.cfg)" "$hn")"
+        done
         n=$((n+1))
     fi
     if [ "$UPDATING" = 0 ]; then
@@ -853,6 +908,15 @@ do_install() {
         local fl="$INSTALL_HOME/fluidd"
         if [ -d "$fl" ] && ask_yn "Also refresh the Fluidd ACE panel?" N "only needed if the panel changed."; then WANT_FLUIDD=1; FLUIDD_DIR="$fl"; fi
         [ -d "$INSTALL_HOME/KlipperScreen/panels" ] && WANT_KS=1
+        if [ "$PROFILE" = "saf" ]; then
+            if [ -n "$(hooks_included_by)" ]; then HOOKS_INCLUDE=present
+            elif [ -f "$CONFIG_DIR/$HOOKS_FILE" ]; then
+                HOOKS_INCLUDE=manual
+                warn_later "$HOOKS_FILE exists but no file includes it, so the Simple AF hooks do not run. Add [include $HOOKS_FILE] to printer.cfg."
+            else
+                ask_hooks_include
+            fi
+        fi
     fi
     [ "$PROFILE" = "kalico" ] || [ "$PROFILE" = "saf" ] || true
 
@@ -884,6 +948,7 @@ do_install() {
     ensure_include_in_printer_cfg
     [ "$HAVE_CUTTER" = 1 ] && ensure_force_move
     [ "$WANT_CUTCAL" = 1 ] && ensure_include_line "[include cut_calibrate.cfg]"
+    [ "$SAF_HOOKS" = "yes" ] && [ "$HOOKS_INCLUDE" = "auto" ] && [ -f "$CONFIG_DIR/$HOOKS_FILE" ] && ensure_include_line "[include $HOOKS_FILE]"
     [ "$WANT_SPOOLMAN" = 1 ] && print_info "spoolman_logic.cfg was copied. To use it, uncomment #[include spoolman_logic.cfg] in acepro.cfg."
     [ "$WANT_FLUIDD" = 1 ] && install_fluidd_panel "$FLUIDD_DIR"
     [ "$WANT_KS" = 1 ] && setup_klipperscreen
@@ -914,6 +979,9 @@ do_check() {
         [ -f "$CONFIG_DIR/$f" ] && print_success "$f present" || { print_error "$f is missing"; bad=1; }
     done
     include_present && print_success "printer.cfg includes acepro.cfg" || { print_error "printer.cfg does not include acepro.cfg"; bad=1; }
+    if [ "$PROFILE" = "saf" ] && [ -f "$CONFIG_DIR/$HOOKS_FILE" ]; then
+        [ -n "$(hooks_included_by)" ] && print_success "$HOOKS_FILE is included" || print_warning "$HOOKS_FILE exists but no file includes it: the Simple AF hooks do not run. Add [include $HOOKS_FILE] to printer.cfg."
+    fi
     x="$KLIPPER_DIR/klippy/extras"
     for f in ace temperature_ace.py virtual_pins.py; do
         if [ -e "$x/$f" ]; then print_success "$f in Klipper's extras folder"

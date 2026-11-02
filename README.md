@@ -250,7 +250,7 @@ Pick **Simple AF**. The installer follows Simple AF's rules:
 - `PAUSE` and `RESUME` are in `acepro_printer_macros.cfg` on every profile. Simple AF's `client.cfg` defines them too and is loaded after the ACE files, so on Simple AF its own versions stay in charge.
 - All files go in the main config folder (not a subfolder), so Simple AF's `pellcorp-overrides` backup keeps them across `installer.sh --update`.
 - It never edits `moonraker.conf` or any other file Simple AF owns.
-- ACE steps for Simple AF's hooks (servo reset, encoder on/off, unload and park on cancel) go into `acepro_saf_hooks.cfg`, **only if you have none of those hooks**. If you already have your own (for example `my_saf_hooks.cfg`), the installer leaves them alone and shows the lines to add. See [`examples/saf_hooks_example.cfg`](examples/saf_hooks_example.cfg).
+- **Hooks file `my_saf_hooks.cfg`.** The installer asks if it may add `[include my_saf_hooks.cfg]` to `printer.cfg`, or if you will add that line yourself in Fluidd (it then tells you where). If you already have a `my_saf_hooks.cfg`, it is **updated, not replaced**: your own lines stay as they are, and the ACE lines go at the **top** of each hook (`SFS_ENABLE_ACE_ENCODER` in `_SAF_START_PRINT_END`, `SFS_DISABLE_ACE_ENCODER` in `_SAF_END_PRINT_START` and `_SAF_ON_CANCEL`, plus servo reset, unload and park). The two encoder lines are added only if you said you have the ACE encoder sensor; if you said no, they are removed. Hooks that another file already defines are left alone and listed at the end. The old copy is in the backup (`--undo` restores it).
 - **Pause and resume follow the ACE switch.** Simple AF's `PAUSE` and `RESUME` stay in charge and call two hooks, `_SAF_ON_PAUSE` and `_SAF_ON_RESUME`, which the hooks file points at `_ACE_ON_PAUSE` and `_ACE_ON_RESUME`. With the `ACE_Pro` switch **off** they do nothing (pure Simple AF). With it **on**: on pause the servo is retracted, the filament is retracted a little and the nozzle standby timer starts; on resume the nozzle is reheated, the ACE tool is reloaded if there is no filament at the nozzle (or a tool change was left half done), otherwise the nozzle is purged and wiped over the poop bucket. Simple AF still parks and returns the head itself.
 - A Simple AF update only runs `git reset --hard` on its Klipper copy, so the links usually survive. Run `./installer.sh --repair` afterwards to be sure.
 - Keep the start line `MY_START_PRINT TOOL=... ` (section 5.1). It loads the tool and then runs Simple AF's `START_PRINT`.
@@ -299,7 +299,7 @@ All settings are commented in the files. The ones to check first:
 | `acepro_macros.cfg` | `_ACE_VARS`: cutter, poop bucket, wipe, servo and park positions. Tool-change macros. |
 | `acepro_printer_macros.cfg` | `PAUSE`, `RESUME`, `LOAD_FILAMENT`, `UNLOAD_FILAMENT`, `PARK_FOR_CANCEL`, purge helpers and `MY_START_PRINT`. |
 | `acepro_servo.cfg` | `[servo servo_wipe]` with your pin. Not there if you have no servo. |
-| `acepro_saf_hooks.cfg` | ACE steps for Simple AF hooks (only written if you have no hooks of your own). |
+| `my_saf_hooks.cfg` | Simple AF hooks with the ACE steps (Simple AF only). An existing file is updated, not replaced. |
 | `acepro-install.conf` | The answers you gave the installer. `--update` reuses them. |
 | `acepro.cfg` | Filament sensors, encoder, `CUT_TIP`, poop and wipe moves, servo handling. |
 | `cut_calibrate.cfg` | Optional cutter calibration macros (section 9). |

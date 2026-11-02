@@ -99,21 +99,39 @@ inst "$H" '3\n2\nPA4\nn\nn\ny\nPB14\ny\ny\nn\nn\ny\n'
 check "installer finished"                           test "$RC" -eq 0
 check "profile detected as Simple AF"                grep -q "found Simple AF" <<<"$OUT"
 check "ACE PAUSE/RESUME present on every profile"    grep -q '^\[gcode_macro PAUSE\]' "$C/acepro_printer_macros.cfg"
-check "hooks file NOT written (you have hooks)"      test ! -e "$C/acepro_saf_hooks.cfg"
-check "hook lines to add are shown"                  grep -q "_SAF_ON_CANCEL" <<<"$OUT"
-check "pause/resume hook lines are shown"            grep -q "_ACE_ON_RESUME" <<<"$OUT"
-check "your hooks file untouched"                    test "$(cat "$C/my_saf_hooks.cfg")" = "$(printf '[gcode_macro _SAF_START_PRINT_END]\ngcode:\n  M117 hi')"
+check "your hooks file kept your line"              grep -q 'M117 hi' "$C/my_saf_hooks.cfg"
+check "ACE pause/resume hooks added to it"           bash -c 'grep -q _ACE_ON_PAUSE "$0" && grep -q _ACE_ON_RESUME "$0"' "$C/my_saf_hooks.cfg"
+check "no encoder lines (no encoder chosen)"         test -z "$(grep SFS_ "$C/my_saf_hooks.cfg")"
+check "include not added twice"                      test "$(grep -c 'include my_saf_hooks.cfg' "$C/printer.cfg")" -eq 1
+check "no separate acepro_saf_hooks.cfg"             test ! -e "$C/acepro_saf_hooks.cfg"
 check "moonraker.conf not created"                   test ! -e "$C/moonraker.conf"
 check "validator passes (saf)"                       python3 -I "$REPO/tools/validate_config.py" "$C/printer.cfg" --profile saf
 inst "$H" "y\n" --undo; check "undo restores printer.cfg exactly" cmp -s "$C/printer.cfg" "$ROOT/t6.printer.before"
+check "undo restores your hooks file exactly"        test "$(cat "$C/my_saf_hooks.cfg")" = "$(printf '[gcode_macro _SAF_START_PRINT_END]\ngcode:\n  M117 hi')"
 
-echo "7. Simple AF without hooks gets the ACE hooks file"
+echo "7. Simple AF without a hooks file: new my_saf_hooks.cfg, include added"
 H="$(new_home t7)"; C="$(cfg "$H")"; mkdir -p "$H/pellcorp"
-inst "$H" '3\n1\nPA4\nn\nn\ny\nPB14\ny\ny\nn\nn\ny\n'
+inst "$H" '3\n1\nPA4\nn\nn\ny\nPB14\ny\ny\nn\nn\ny\ny\n'
 check "installer finished"                           test "$RC" -eq 0
-check "acepro_saf_hooks.cfg written"                 test -f "$C/acepro_saf_hooks.cfg"
-check "pause/resume hooks call the ACE steps"        bash -c 'grep -q _ACE_ON_PAUSE "$0" && grep -q _ACE_ON_RESUME "$0"' "$C/acepro_saf_hooks.cfg"
+check "my_saf_hooks.cfg written"                     test -f "$C/my_saf_hooks.cfg"
+check "include added to printer.cfg"                 grep -q '^\[include my_saf_hooks.cfg\]' "$C/printer.cfg"
+check "pause/resume hooks call the ACE steps"        bash -c 'grep -q _ACE_ON_PAUSE "$0" && grep -q _ACE_ON_RESUME "$0"' "$C/my_saf_hooks.cfg"
+check "no encoder lines (no encoder chosen)"         test -z "$(grep SFS_ "$C/my_saf_hooks.cfg")"
 check "validator passes (saf)"                       python3 -I "$REPO/tools/validate_config.py" "$C/printer.cfg" --profile saf
+
+echo "7b. Simple AF with encoder, your hooks file, manual include, a hook defined elsewhere"
+H="$(new_home t7b)"; C="$(cfg "$H")"; mkdir -p "$H/pellcorp"
+printf '[gcode_macro _SAF_START_PRINT_END]\ngcode:\n   M117 start\n   SFS_ENABLE_ACE_ENCODER\n   M117 more\n\n[gcode_macro _SAF_END_PRINT_START]\ngcode:\n   M117 end\n' > "$C/my_saf_hooks.cfg"
+printf '[gcode_macro _SAF_ON_RESUME]\ngcode:\n  M117 mine\n' > "$C/my_other.cfg"
+inst "$H" '3\n1\nPA4\nn\ny\nPF1\ny\nPB14\ny\ny\nn\nn\nn\ny\n'
+check "installer finished"                           test "$RC" -eq 0
+check "encoder line moved to the top"                test "$(awk '/^\[gcode_macro _SAF_START_PRINT_END\]/{f=1;next} f&&/^gcode:/{g=1;next} g{print $1; exit}' "$C/my_saf_hooks.cfg")" = "SFS_ENABLE_ACE_ENCODER"
+check "disable-encoder added at the top elsewhere"   test "$(awk '/^\[gcode_macro _SAF_END_PRINT_START\]/{f=1;next} f&&/^gcode:/{g=1;next} g{print $1; exit}' "$C/my_saf_hooks.cfg")" = "SFS_DISABLE_ACE_ENCODER"
+check "your lines kept"                              bash -c 'grep -q "M117 more" "$0" && grep -q "M117 end" "$0"' "$C/my_saf_hooks.cfg"
+check "hook defined elsewhere not added"             test -z "$(grep '_SAF_ON_RESUME' "$C/my_saf_hooks.cfg")"
+check "hook defined elsewhere is listed"             grep -q "_SAF_ON_RESUME" <<<"$OUT"
+check "manual include: line not added"               test -z "$(grep 'include my_saf_hooks.cfg' "$C/printer.cfg")"
+check "manual include: told where to add it"         grep -q "include my_saf_hooks.cfg" <<<"$OUT"
 
 echo "8. Update keeps your settings"
 H="$(new_home t8)"; C="$(cfg "$H")"
