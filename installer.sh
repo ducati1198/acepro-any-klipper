@@ -620,13 +620,17 @@ ensure_include_line() { # line
 }
 
 ensure_force_move() {
-    local pc="$CONFIG_DIR/printer.cfg"
+    local pc="$CONFIG_DIR/printer.cfg" f
     [ -f "$pc" ] || return 0
-    if grep -qE '^[[:space:]]*\[force_move\]' "$pc"; then
-        grep -qiE '^[[:space:]]*enable_force_move[[:space:]]*:[[:space:]]*true' "$pc" || \
-            warn_later "printer.cfg has [force_move] but enable_force_move is not True. CUT_TIP needs it."
-        return 0
-    fi
+    # [force_move] may already be in any of your files (Simple AF's homing.cfg has it): look in all of them
+    for f in "$CONFIG_DIR"/*.cfg; do
+        [ -f "$f" ] || continue
+        if grep -qE '^[[:space:]]*\[force_move\]' "$f"; then
+            awk '/^[[:space:]]*\[force_move\]/{p=1;next} /^[[:space:]]*\[/{p=0} p&&/^[[:space:]]*enable_force_move[[:space:]]*:[[:space:]]*[Tt]rue/{f=1} END{exit f?0:1}' "$f" || \
+                warn_later "$(basename "$f") has [force_move] but enable_force_move is not True. CUT_TIP needs it."
+            return 0
+        fi
+    done
     backup_path "$pc"
     add_before_save_config "$pc" "$(printf '[force_move]\nenable_force_move: True')"
     print_success "Added [force_move] enable_force_move: True to printer.cfg (CUT_TIP needs it)"

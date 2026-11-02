@@ -135,6 +135,8 @@ def check_jinja(items, res):
             continue
         if opt != "gcode" and not opt.startswith("description"):
             continue
+        # Klipper's config reader drops ' # comment' tails before it builds the template
+        val = "\n".join(re.sub(r"\s+[#;].*$", "", l) for l in val.split("\n"))
         try:
             env.parse(val)
         except jinja2.TemplateSyntaxError as exc:

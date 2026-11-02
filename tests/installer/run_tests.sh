@@ -198,5 +198,15 @@ check "bundle created"                               test -n "$B"
 check "secret removed from the bundle"               test -z "$(tar -xzOf "$B" 2>/dev/null | grep SUPERSECRET123)"
 
 echo
+echo "14. [force_move] already in another file is not added twice"
+H="$(new_home t14)"; C="$(cfg "$H")"
+printf '[force_move]\nenable_force_move: true\n' > "$C/homing.cfg"; printf '[include homing.cfg]\n' | cat - "$C/printer.cfg" > "$C/p.new" && mv "$C/p.new" "$C/printer.cfg"
+inst "$H" "$A_KLIPPER"
+check "installer finished"                           test "$RC" -eq 0
+check "no second [force_move] in printer.cfg"        test -z "$(grep '^\[force_move\]' "$C/printer.cfg")"
+echo "15. Validator: inline comments inside a template are not errors"
+printf '[gcode_macro T]\ngcode:\n  {%% set a = 1 if x == ""   # why\n        else 2 %%}\n  M117 {a}\n' > "$ROOT/t15.cfg"
+check "no template error"                            bash -c 'python3 -I "$0/tools/validate_config.py" "$1" --profile klipper | grep -q "template error" && exit 1 || exit 0' "$REPO" "$ROOT/t15.cfg"
+
 echo "Passed: $PASS   Failed: $FAIL"
 [ "$FAIL" -eq 0 ]
