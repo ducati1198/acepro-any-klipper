@@ -195,7 +195,7 @@ detect_profile() {
     echo klipper
 }
 
-load_profile() { # profile -> sets PROFILE_NAME, PAUSE_RESUME, SAF_HOOKS, PROFILE_CHAIN
+load_profile() { # profile -> sets PROFILE_NAME, SAF_HOOKS, PROFILE_CHAIN
     local p="$1" conf inherit
     PROFILE_CHAIN=()
     while [ -n "$p" ]; do
@@ -204,7 +204,6 @@ load_profile() { # profile -> sets PROFILE_NAME, PAUSE_RESUME, SAF_HOOKS, PROFIL
         PROFILE_CHAIN+=("$p")
         if [ "${#PROFILE_CHAIN[@]}" -eq 1 ]; then
             PROFILE_NAME="$(kv_get "$conf" NAME)"
-            PAUSE_RESUME="$(kv_get "$conf" PAUSE_RESUME)"
             SAF_HOOKS="$(kv_get "$conf" SAF_HOOKS)"
         fi
         inherit="$(kv_get "$conf" INHERIT)"
@@ -375,11 +374,6 @@ stage_files() {
         cp "$SCRIPT_DIR/config/$f" "$STAGE/$f"
     done
 
-    # PAUSE / RESUME: not on Simple AF (its client.cfg owns them)
-    if [ "$PAUSE_RESUME" = "yes" ]; then
-        cp "$(profile_file acepro_pause_resume.cfg)" "$STAGE/acepro_pause_resume.cfg"
-    fi
-
     # Simple AF hooks: only when you have none of these hook macros anywhere
     if [ "$SAF_HOOKS" = "yes" ]; then
         local hookfile existing
@@ -472,14 +466,6 @@ stage_update_values() {
         { echo "# Moved here by installer.sh from acepro_macros.cfg (your pin and angles are unchanged)."; echo "$block"; } > "$STAGE/acepro_servo.cfg"
         print_info "Moved your [servo servo_wipe] section into acepro_servo.cfg"
     fi
-    # Older installs had PAUSE/RESUME inside acepro_printer_macros.cfg: keep their values
-    if [ -f "$STAGE/acepro_pause_resume.cfg" ]; then
-        if [ -f "$(OLD acepro_pause_resume.cfg)" ]; then
-            cfg_tool carry "$(OLD acepro_pause_resume.cfg)" "$STAGE/acepro_pause_resume.cfg" >/dev/null 2>&1 || true
-        elif [ -f "$(OLD acepro_printer_macros.cfg)" ]; then
-            cfg_tool carry "$(OLD acepro_printer_macros.cfg)" "$STAGE/acepro_pause_resume.cfg" >/dev/null 2>&1 || true
-        fi
-    fi
     [ -f "$(OLD acepro_printer_macros.cfg)" ] && cfg_tool carry "$(OLD acepro_printer_macros.cfg)" "$STAGE/acepro_printer_macros.cfg" >/dev/null 2>&1
     print_info "Kept $total of your settings from the current files."
 }
@@ -509,7 +495,6 @@ show_plan() {
     for l in "${PLAN_LINES[@]}"; do echo "  $l"; done
     include_present && echo "  ok      printer.cfg already has [include acepro.cfg]" || echo "  EDIT    printer.cfg (+1 include line at the top)"
     echo "  LINK    $KLIPPER_DIR/klippy/extras/ace → $SCRIPT_DIR/extras/ace"
-    [ "$PAUSE_RESUME" = "yes" ] || echo "  SKIP    PAUSE / RESUME (the printer's own stay in charge)"
     if [ "$PROFILE" = "saf" ]; then
         echo "  SKIP    moonraker.conf (never touched on Simple AF)"
         [ "$HOOKS_CONFLICT" = 1 ] && echo "  SKIP    ACE hooks file (you already have SAF hooks; the lines to add are shown at the end)"
@@ -869,15 +854,6 @@ do_install() {
     fi
     [ "$PROFILE" = "kalico" ] || [ "$PROFILE" = "saf" ] || true
 
-    # Warn when another file also defines PAUSE/RESUME and is loaded after ours (Klipper/Kalico profiles)
-    if [ "$PAUSE_RESUME" = "yes" ]; then
-        local other
-        other="$(grep -lE '^\[gcode_macro[[:space:]]+(PAUSE|RESUME)\]' "$CONFIG_DIR"/*.cfg 2>/dev/null | grep -v -E '/acepro_|/printer-[^/]*\.cfg$|\.backup' || true)"
-        if [ -n "$other" ]; then
-            warn_later "Another file also defines PAUSE/RESUME ($(basename $(echo "$other" | head -1))). If it is loaded after [include acepro.cfg] in printer.cfg, its version wins and the ACE pause steps will not run. To use the ACE versions, move [include acepro.cfg] below that file's include."
-        fi
-    fi
-
     print_header "6 of 7 · What will change"
     stage_files
     echo "Backup of everything that changes:  $BACKUP_ROOT/<date>   (undo: ./installer.sh --undo)"
@@ -935,9 +911,6 @@ do_check() {
     for f in acepro.cfg acepro_setting.cfg acepro_macros.cfg acepro_printer_macros.cfg; do
         [ -f "$CONFIG_DIR/$f" ] && print_success "$f present" || { print_error "$f is missing"; bad=1; }
     done
-    if [ "$PAUSE_RESUME" = "yes" ]; then
-        [ -f "$CONFIG_DIR/acepro_pause_resume.cfg" ] && print_success "acepro_pause_resume.cfg present" || { print_error "acepro_pause_resume.cfg is missing"; bad=1; }
-    fi
     include_present && print_success "printer.cfg includes acepro.cfg" || { print_error "printer.cfg does not include acepro.cfg"; bad=1; }
     x="$KLIPPER_DIR/klippy/extras"
     for f in ace temperature_ace.py virtual_pins.py; do
@@ -979,9 +952,6 @@ do_repair() {
     for f in acepro.cfg acepro_setting.cfg acepro_macros.cfg acepro_printer_macros.cfg; do
         if [ ! -f "$CONFIG_DIR/$f" ]; then cp "$SCRIPT_DIR/config/$f" "$CONFIG_DIR/$f"; echo "NEW $CONFIG_DIR/$f" >> "$BACKUP_DIR/manifest.txt"; print_warning "$f was missing; restored the default (check your settings)"; fi
     done
-    if [ "$PAUSE_RESUME" = "yes" ] && [ ! -f "$CONFIG_DIR/acepro_pause_resume.cfg" ]; then
-        cp "$(profile_file acepro_pause_resume.cfg)" "$CONFIG_DIR/acepro_pause_resume.cfg"; echo "NEW $CONFIG_DIR/acepro_pause_resume.cfg" >> "$BACKUP_DIR/manifest.txt"; print_success "Restored acepro_pause_resume.cfg"
-    fi
     echo
     do_check
 }

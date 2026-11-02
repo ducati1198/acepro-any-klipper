@@ -37,7 +37,7 @@ echo "1. Klipper, fresh install"
 H="$(new_home t1)"; C="$(cfg "$H")"
 inst "$H" "$A_KLIPPER"
 check "installer finished"                           test "$RC" -eq 0
-for f in acepro.cfg acepro_setting.cfg acepro_macros.cfg acepro_printer_macros.cfg acepro_pause_resume.cfg acepro_servo.cfg acepro-install.conf; do
+for f in acepro.cfg acepro_setting.cfg acepro_macros.cfg acepro_printer_macros.cfg acepro_servo.cfg acepro-install.conf; do
     check "$f written"                               test -f "$C/$f"
 done
 check "servo pin PB14 written"                       grep -q '^pin: PB14' "$C/acepro_servo.cfg"
@@ -98,8 +98,7 @@ cp "$C/printer.cfg" "$ROOT/t6.printer.before"
 inst "$H" '3\n2\nPA4\nn\nn\ny\nPB14\ny\ny\nn\nn\ny\n'
 check "installer finished"                           test "$RC" -eq 0
 check "profile detected as Simple AF"                grep -q "found Simple AF" <<<"$OUT"
-check "no ACE PAUSE/RESUME installed"                test ! -e "$C/acepro_pause_resume.cfg"
-check "no PAUSE defined by ACE files"                test -z "$(grep -l '^\[gcode_macro PAUSE\]' "$C"/acepro*.cfg 2>/dev/null)"
+check "ACE PAUSE/RESUME present on every profile"    grep -q '^\[gcode_macro PAUSE\]' "$C/acepro_printer_macros.cfg"
 check "hooks file NOT written (you have hooks)"      test ! -e "$C/acepro_saf_hooks.cfg"
 check "hook lines to add are shown"                  grep -q "_SAF_ON_CANCEL" <<<"$OUT"
 check "your hooks file untouched"                    test "$(cat "$C/my_saf_hooks.cfg")" = "$(printf '[gcode_macro _SAF_START_PRINT_END]\ngcode:\n  M117 hi')"
@@ -137,7 +136,7 @@ if grep -q '^\[servo servo_wipe\]' "$C/acepro_macros.cfg" && grep -q '^\[gcode_m
     check "update finished"                          test "$RC" -eq 0
     check "servo moved into acepro_servo.cfg"        grep -q '^pin: PB14' "$C/acepro_servo.cfg"
     check "servo removed from acepro_macros.cfg"     test -z "$(grep '^\[servo servo_wipe\]' "$C/acepro_macros.cfg")"
-    check "PAUSE moved into acepro_pause_resume.cfg" grep -q '^\[gcode_macro PAUSE\]' "$C/acepro_pause_resume.cfg"
+    check "PAUSE still in acepro_printer_macros.cfg" grep -q '^\[gcode_macro PAUSE\]' "$C/acepro_printer_macros.cfg"
     check "validator passes on the result"          python3 -I "$REPO/tools/validate_config.py" "$C/printer.cfg" --profile klipper
 else
     echo "  skip  old layout not available in this clone"

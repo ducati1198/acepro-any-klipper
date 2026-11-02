@@ -2,7 +2,7 @@
 
 What the installer does differently on Simple AF (Pellcorp):
 
-- Keeps Simple AF's `PAUSE` and `RESUME` (`client.cfg`). It does not install `acepro_pause_resume.cfg`.
+- `PAUSE` and `RESUME` come with the shared `acepro_printer_macros.cfg` like on every profile. Simple AF's `client.cfg` defines them too; the file loaded last wins, and on Simple AF that is `client.cfg`, so the printer's own versions stay in charge.
 - Puts every file in the main config folder (not a subfolder), so Simple AF's `pellcorp-overrides`
   backup keeps them across `installer.sh --update`.
 - Never edits `moonraker.conf`, `client.cfg`, `start_end.cfg` or other files Simple AF owns.

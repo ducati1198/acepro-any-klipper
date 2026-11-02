@@ -237,7 +237,7 @@ The installer asks a few plain questions, shows exactly what it will change, and
 
 #### Klipper
 
-Pick **Klipper**. You get everything: the ACE `PAUSE` / `RESUME` (`acepro_pause_resume.cfg`), which pause, retract, deploy the servo and reload the tool on resume. `MY_START_PRINT` hands over to your own `START_PRINT`. If another file of yours (for example Mainsail's or Fluidd's `client.cfg`) also defines `PAUSE` / `RESUME` and is loaded after `[include acepro.cfg]`, its version wins; the installer warns you and tells you how to put ours last.
+Pick **Klipper**. You get everything: the ACE `PAUSE` / `RESUME` (in `acepro_printer_macros.cfg`), which pause, retract, deploy the servo and reload the tool on resume. `MY_START_PRINT` hands over to your own `START_PRINT`. If another file of yours (for example Mainsail's or Fluidd's `client.cfg`) also defines `PAUSE` / `RESUME` and is loaded after `[include acepro.cfg]`, its version wins; `./installer.sh --check` lists it as a note. Move `[include acepro.cfg]` below that include to use the ACE versions.
 
 #### Kalico
 
@@ -247,7 +247,7 @@ Pick **Kalico**. Same files as Klipper. The installer also warns if a heater has
 
 Pick **Simple AF**. The installer follows Simple AF's rules:
 
-- Simple AF keeps its own `PAUSE` and `RESUME` (`client.cfg`), so the ACE versions are **not** installed.
+- `PAUSE` and `RESUME` are in `acepro_printer_macros.cfg` on every profile. Simple AF's `client.cfg` defines them too and is loaded after the ACE files, so on Simple AF its own versions stay in charge.
 - All files go in the main config folder (not a subfolder), so Simple AF's `pellcorp-overrides` backup keeps them across `installer.sh --update`.
 - It never edits `moonraker.conf` or any other file Simple AF owns.
 - ACE steps for Simple AF's hooks (servo reset, encoder on/off, unload and park on cancel) go into `acepro_saf_hooks.cfg`, **only if you have none of those hooks**. If you already have your own (for example `my_saf_hooks.cfg`), the installer leaves them alone and shows the lines to add. See [`examples/saf_hooks_example.cfg`](examples/saf_hooks_example.cfg).
@@ -296,8 +296,7 @@ All settings are commented in the files. The ones to check first:
 |---|---|
 | `acepro_setting.cfg` | `[ace]` hardware settings: unit count, feed/retract speeds, tube lengths, purge, Moonraker sync. Also the virtual switches `ACE_Pro`, `endless_spool`, `AUTO_UNLOAD`. |
 | `acepro_macros.cfg` | `_ACE_VARS`: cutter, poop bucket, wipe, servo and park positions. Tool-change macros. |
-| `acepro_printer_macros.cfg` | `LOAD_FILAMENT`, `UNLOAD_FILAMENT`, `PARK_FOR_CANCEL`, purge helpers and `MY_START_PRINT`. |
-| `acepro_pause_resume.cfg` | `PAUSE` and `RESUME` (Klipper and Kalico only; Simple AF keeps its own). |
+| `acepro_printer_macros.cfg` | `PAUSE`, `RESUME`, `LOAD_FILAMENT`, `UNLOAD_FILAMENT`, `PARK_FOR_CANCEL`, purge helpers and `MY_START_PRINT`. |
 | `acepro_servo.cfg` | `[servo servo_wipe]` with your pin. Not there if you have no servo. |
 | `acepro_saf_hooks.cfg` | ACE steps for Simple AF hooks (only written if you have no hooks of your own). |
 | `acepro-install.conf` | The answers you gave the installer. `--update` reuses them. |
@@ -789,11 +788,11 @@ acepro-any-klipper/
 │   ├── acepro.cfg                Sensors, CUT_TIP, poop, wipe, servo
 │   ├── acepro_setting.cfg        [ace] settings and virtual switches
 │   ├── acepro_macros.cfg         _ACE_VARS positions and tool-change macros
-│   ├── acepro_printer_macros.cfg LOAD/UNLOAD, PARK_FOR_CANCEL, MY_START_PRINT
+│   ├── acepro_printer_macros.cfg PAUSE / RESUME, LOAD/UNLOAD, PARK_FOR_CANCEL, MY_START_PRINT
 │   ├── cut_calibrate.cfg         Cutter calibration
 │   └── spoolman_logic.cfg        Optional Spoolman helpers
 ├── profiles/                     What differs per printer software
-│   ├── klipper/                  PAUSE / RESUME (acepro_pause_resume.cfg)
+│   ├── klipper/                  Base profile (no extra files)
 │   ├── kalico/                   Same as klipper, plus the heater `control:` check
 │   └── saf/                      Simple AF: hooks file, notes (no PAUSE / RESUME)
 ├── examples/                     Not installed: servo_wiper.cfg, saf_hooks_example.cfg
