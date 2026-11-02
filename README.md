@@ -3,6 +3,7 @@
 # ACE Pro for Klipper
 
 **Run an Anycubic ACE Pro multi-material unit (or two, or three) on any Klipper printer.**
+One installer for **Klipper**, **Kalico** and **Simple AF**.
 Tuned and tested on a **Creality K1 Max** (Raspberry Pi 5, Kalico, Fluidd, KlipperScreen) with two ACE Pro units (T0–T7).
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
@@ -42,11 +43,11 @@ Tuned and tested on a **Creality K1 Max** (Raspberry Pi 5, Kalico, Fluidd, Klipp
 
 | | |
 |---|---|
-| **Any Klipper printer** | Not tied to Anycubic hardware. Voron, RatRig, Creality K1 and others work. |
+| **Klipper, Kalico and Simple AF** | Not tied to Anycubic hardware. Voron, RatRig, Creality K1 and others work. The installer asks which software you run and sets up the right files ([section 3](#3-install)). |
 | **1–3 ACE Pro units** | T0–T3, T4–T7, T8–T11. Tested with two units. |
 | **Full tool changes** | Retract, cut, unload, load, purge, wipe, all driven by `T0`…`T7`. |
 | **Filament cutter** | `CUT_TIP` with a step-by-step calibration (`cut_calibrate.cfg`). |
-| **Servo poop basket** | Deploys for heating, purging and wiping, then retracts. |
+| **Servo poop basket** | Deploys for heating, purging and wiping, then retracts. Optional: the installer switches it off if you have none. |
 | **Spool mapping at print start** | Pick which physical spool prints each sliced filament. No re-slicing. |
 | **Fluidd panel** | An ACE card with four layouts, a tool-change progress bar, dryer presets, a cutter wizard, counters and a "Choose ACE spools" window at print start ([section 7](#7-fluidd-ace-panel)). |
 | **OrcaSlicer plugin** | The same choice inside Orca, written into the G-code when you send it. |
@@ -183,8 +184,9 @@ Important positions in `acepro_macros.cfg`:
 
 ### 3.1 Requirements
 
-- A Klipper or Kalico printer with Python 3.9+, running Moonraker.
+- Klipper, Kalico or Simple AF (Pellcorp) with Python 3.9+, running Moonraker.
 - One to three ACE Pro units connected by USB (a powered hub or HAT is fine).
+- A **filament sensor at the toolhead** (the driver needs it). A sensor after the splitter (RDM) and the ACE encoder are optional.
 - SSH access to the Pi.
 
 ### 3.2 Driver (one-command installer)
@@ -199,21 +201,62 @@ chmod +x installer.sh
 ./installer.sh
 ```
 
-The installer asks before each step and is safe to run again (it backs up before replacing anything). It will:
+The installer asks a few plain questions, shows exactly what it will change, and only then does it. It saves a backup first, so `./installer.sh --undo` puts everything back.
 
-1. Link the ACE driver (`extras/ace/`), `virtual_pins` and the ACE temperature sensor into Klipper's `extras` folder.
-2. Remove the old ACE web dashboard links, if an earlier install added them (the dashboard is no longer shipped).
-3. Check that `pyserial` and `jinja2` are available and that the driver compiles.
-4. Install the **Fluidd ACE panel** (ACE card + spool picker): checks the zip, backs up `~/fluidd`, keeps your `config.json`, and restores the backup if the panel isn't found afterwards.
-5. Copy `acepro.cfg`, `acepro_printer_macros.cfg`, `acepro_setting.cfg` and `acepro_macros.cfg` into your config folder (existing files are backed up) and add `[include acepro.cfg]` at the top of `printer.cfg`.
-6. Copy `cut_calibrate.cfg` and `spoolman_logic.cfg`, add `[force_move]` (needed by `CUT_TIP`) and, if you want, `[include cut_calibrate.cfg]`.
-7. Link the **KlipperScreen** panel, add the **ACE Pro** menu entries and set `font_size = small`.
-8. Restart Moonraker, Klipper and KlipperScreen, wait for Klipper and tell you whether the ACE driver loaded.
-9. Print the steps for the **OrcaSlicer plugin**, which has to be installed on your computer (section 5.3).
+**The questions** (each has a one-line reason and a safe default):
+
+1. Which software: **Klipper**, **Kalico** or **Simple AF**. It suggests one by looking at your Pi.
+2. How many ACE units, and the pin of your toolhead filament sensor. Do you also have an RDM sensor or the ACE encoder?
+3. Do you have the **servo poop basket**? (If not, the servo is switched off and left out of your config.)
+4. Do you have a **filament cutter** and a **poop bucket**? (If not, those macros are switched off.)
+5. Optional extras: Fluidd ACE panel, KlipperScreen menu, Spoolman helpers, cutter calibration.
+
+**What it does:**
+
+1. Links the ACE driver (`extras/ace/`), `virtual_pins` and the ACE temperature sensor into Klipper's `extras` folder.
+2. Removes the old ACE web dashboard links, if an earlier install added them.
+3. Checks that `pyserial` and `jinja2` are available and that the driver compiles.
+4. Copies the ACE config files into your config folder and adds `[include acepro.cfg]` at the top of `printer.cfg`.
+5. Checks the result **before** it writes anything, and again before restarting Klipper.
+6. Installs the Fluidd panel and the KlipperScreen menu if you chose them.
+7. Restarts Klipper, waits for it, and runs a **self-test** (Klipper ready, driver loaded, units found).
+8. Prints your next steps, including the exact OrcaSlicer start G-code for your setup.
+
+**More commands:**
+
+| Command | What it does |
+|---|---|
+| `./installer.sh --update` | Update the driver and macros. Your values (positions, speeds, pins) are kept. |
+| `./installer.sh --check` | Look for problems. Changes nothing. |
+| `./installer.sh --repair` | Restore the driver links and the include line (use it after a Simple AF or Fluidd update). |
+| `./installer.sh --undo` | Put back the files saved before the last install. |
+| `./installer.sh --dry-run` | Go through the questions and show what would change. Changes nothing. |
+| `./installer.sh --support-bundle` | Collect config (passwords and tokens removed) and logs to share when something fails. |
+
+**Your positions start locked.** The cutter, poop bucket, wipe and park positions in a new install are placeholders. Moves to them stop with a message until you measure them (section 4.3) and set `variable_positions_confirmed: True`. This is on purpose: the sample numbers come from a Creality K1 Max.
+
+#### Klipper
+
+Pick **Klipper**. You get everything: the ACE `PAUSE` / `RESUME` (`acepro_pause_resume.cfg`), which pause, retract, deploy the servo and reload the tool on resume. `MY_START_PRINT` hands over to your own `START_PRINT`. If another file of yours (for example Mainsail's or Fluidd's `client.cfg`) also defines `PAUSE` / `RESUME` and is loaded after `[include acepro.cfg]`, its version wins; the installer warns you and tells you how to put ours last.
+
+#### Kalico
+
+Pick **Kalico**. Same files as Klipper. The installer also warns if a heater has no `control:` line, because Kalico stops at start-up with `pid_profile ... 'control' has to be specified`.
+
+#### Simple AF
+
+Pick **Simple AF**. The installer follows Simple AF's rules:
+
+- Simple AF keeps its own `PAUSE` and `RESUME` (`client.cfg`), so the ACE versions are **not** installed.
+- All files go in the main config folder (not a subfolder), so Simple AF's `pellcorp-overrides` backup keeps them across `installer.sh --update`.
+- It never edits `moonraker.conf` or any other file Simple AF owns.
+- ACE steps for Simple AF's hooks (servo reset, encoder on/off, unload and park on cancel) go into `acepro_saf_hooks.cfg`, **only if you have none of those hooks**. If you already have your own (for example `my_saf_hooks.cfg`), the installer leaves them alone and shows the lines to add. See [`examples/saf_hooks_example.cfg`](examples/saf_hooks_example.cfg).
+- A Simple AF update only runs `git reset --hard` on its Klipper copy, so the links usually survive. Run `./installer.sh --repair` afterwards to be sure.
+- Keep the start line `MY_START_PRINT TOOL=... ` (section 5.1). It loads the tool and then runs Simple AF's `START_PRINT`.
 
 ### 3.3 Check `printer.cfg`
 
-The installer adds these for you. Check they are there:
+The installer adds these for you (`[force_move]` only if you have a cutter). Check they are there:
 
 ```ini
 [include acepro.cfg]
@@ -253,7 +296,11 @@ All settings are commented in the files. The ones to check first:
 |---|---|
 | `acepro_setting.cfg` | `[ace]` hardware settings: unit count, feed/retract speeds, tube lengths, purge, Moonraker sync. Also the virtual switches `ACE_Pro`, `endless_spool`, `AUTO_UNLOAD`. |
 | `acepro_macros.cfg` | `_ACE_VARS`: cutter, poop bucket, wipe, servo and park positions. Tool-change macros. |
-| `acepro_printer_macros.cfg` | `PAUSE`, `RESUME`, `LOAD_FILAMENT`, `UNLOAD_FILAMENT` and `MY_START_PRINT`. |
+| `acepro_printer_macros.cfg` | `LOAD_FILAMENT`, `UNLOAD_FILAMENT`, `PARK_FOR_CANCEL`, purge helpers and `MY_START_PRINT`. |
+| `acepro_pause_resume.cfg` | `PAUSE` and `RESUME` (Klipper and Kalico only; Simple AF keeps its own). |
+| `acepro_servo.cfg` | `[servo servo_wipe]` with your pin. Not there if you have no servo. |
+| `acepro_saf_hooks.cfg` | ACE steps for Simple AF hooks (only written if you have no hooks of your own). |
+| `acepro-install.conf` | The answers you gave the installer. `--update` reuses them. |
 | `acepro.cfg` | Filament sensors, encoder, `CUT_TIP`, poop and wipe moves, servo handling. |
 | `cut_calibrate.cfg` | Optional cutter calibration macros (section 9). |
 
@@ -268,7 +315,7 @@ Per-unit values use the comma syntax, for example `feed_speed: 60,1:45` (unit 0:
 
 ### 4.2 Filament sensors
 
-The driver uses a nozzle sensor and, optionally, a splitter (RDM) sensor:
+The driver **needs** a toolhead (nozzle) sensor. A splitter (RDM) sensor and the encoder are optional; the installer leaves their sections out if you say you don't have them:
 
 ```ini
 [filament_switch_sensor filament_runout_nozzle]
@@ -296,7 +343,13 @@ Edit these in `_ACE_VARS` (`acepro_macros.cfg`):
 - **Cutter:** `cut_block_*`, `cut_engage_*`, `cut_full_*` (use the calibration in section 9).
 - **Poop bucket:** `poop_x`, `poop_y`, plus the shake and oscillation values.
 - **Wipe:** `wipe_start_x/y`, `wipe_length`, `wipe_pattern` (`STRAIGHT` or `ZIGZAG`).
-- **Servo:** pin in `[servo servo_wipe]`, `servo_deploy_angle`, `servo_retract_angle`, `servo_min_z`.
+- **Servo:** pin in `acepro_servo.cfg`, and `servo_deploy_angle`, `servo_retract_angle`, `servo_min_z` in `_ACE_VARS`.
+
+What you have is switched on or off in `_ACE_VARS`: `servo_enable`, `cutter_enable`, `poop_enable`. Without a poop bucket the purged filament lands where the nozzle is.
+
+When all positions are measured, set `variable_positions_confirmed: True`. Until then `TO_THROW_POSITION`, `CUT_TIP` and everything that uses them stop with a message instead of moving.
+
+**A fixed brush instead of a servo wiper?** The ACE's own wipe moves (`wipe_start_x/y`, `wipe_length`, `wipe_qty`, `wipe_pattern`) work over a fixed brush; no servo is needed. If you want a separate `WIPE_NOZZLE` macro (brush on the bed or the frame, with or without a servo), see the example [`examples/servo_wiper.cfg`](examples/servo_wiper.cfg). The installer never installs it.
 
 ### 4.4 Temperature sensors
 
@@ -634,12 +687,23 @@ More: [`CONNECTION_SUPERVISION.md`](CONNECTION_SUPERVISION.md).
 ### Update from GitHub
 
 ```bash
-rm -rf ~/acepro-any-klipper
-cd ~ && git clone -b dev https://github.com/ducati1198/acepro-any-klipper
-cd acepro-any-klipper && ./installer.sh
+cd ~/acepro-any-klipper
+git pull
+./installer.sh --update
 ```
 
-Answer **n** when the installer offers to replace config files you edited. Back up your `~/printer_data/config/acepro*.cfg` first. Then restart Klipper, Moonraker and KlipperScreen and hard-refresh the browser.
+`--update` takes the new code and keeps your values: positions, speeds, sensor pins, the servo pin and which optional parts you left out. It also moves a `[servo servo_wipe]` section or `PAUSE` / `RESUME` from an older single-file install into the new files. If you edited the *code* of a macro (not just its values), that edit is not carried over; your old file is in the backup. The installer tells you when a newer version is on GitHub.
+
+### Undo
+
+Every install and update first saves what it will change in `~/acepro-backup/<date>/`. To put it back:
+
+```bash
+./installer.sh --undo            # the latest backup
+./installer.sh --undo ~/acepro-backup/20261102_103000   # a specific one
+```
+
+It restores changed files, removes files the install added, and puts links back as they were.
 
 ### What changed in the latest sync
 
@@ -673,6 +737,10 @@ pytest
 | Symptom | Fix |
 |---|---|
 | `Internal error during connect: 'NoneType' object has no attribute 'send'` | Klipper cannot reach an MCU over USB. See "Raspberry Pi 5 + USB HAT" below. |
+| The installer says a pin is not valid | Use the pin name from your `printer.cfg`, for example `PA4`, `nozzle_mcu:PA8` or `^PC15`. |
+| Cutter, poop or wipe moves stop with "positions not confirmed" | Measure them (section 4.3), then set `variable_positions_confirmed: True` in `_ACE_VARS`. |
+| The ACE pause steps do not run (Klipper / Kalico) | Another file defines `PAUSE` / `RESUME` and loads after `[include acepro.cfg]`. Move the ACE include below it. `./installer.sh --check` shows files that define the same macro. |
+| Links in `klippy/extras` missing after a Simple AF or Fluidd update | `./installer.sh --repair` |
 | ACE not found | Check `ls /dev/serial/by-id/`. Run `ACE_REDETECT`. Check the USB cable and the ACE power supply. |
 | `UNSOLICITED` messages in the console | Normal after a reconnect (old replies are discarded). If frequent, check the cable and power. |
 | `High-priority queue full` | Transient. Restart Klipper or power-cycle the ACE if it persists. |
@@ -710,25 +778,33 @@ If your ACE and MCUs disappear after an OS update, check `dmesg | grep -i xhci` 
 
 ```
 acepro-any-klipper/
-├── installer.sh                  Interactive installer
+├── installer.sh                  Installer (install, --update, --check, --repair, --undo, --dry-run, --support-bundle)
+├── VERSION, CHANGELOG.md         Version and what changed
 ├── extras/ace/                   Klipper driver (linked into klippy/extras)
 │   ├── manager.py, commands.py   Tool changes and G-code commands
 │   ├── tool_map.py               Spool mapping at print start
 │   ├── endless_spool.py          Runout handling
 │   └── moonraker_lane_sync.py    Orca lane_data sync
-├── config/                       My working configs (copy and adapt)
+├── config/                       Shared core configs (every profile)
 │   ├── acepro.cfg                Sensors, CUT_TIP, poop, wipe, servo
 │   ├── acepro_setting.cfg        [ace] settings and virtual switches
 │   ├── acepro_macros.cfg         _ACE_VARS positions and tool-change macros
-│   ├── acepro_printer_macros.cfg PAUSE / RESUME / MY_START_PRINT
+│   ├── acepro_printer_macros.cfg LOAD/UNLOAD, PARK_FOR_CANCEL, MY_START_PRINT
 │   ├── cut_calibrate.cfg         Cutter calibration
 │   └── spoolman_logic.cfg        Optional Spoolman helpers
+├── profiles/                     What differs per printer software
+│   ├── klipper/                  PAUSE / RESUME (acepro_pause_resume.cfg)
+│   ├── kalico/                   Same as klipper, plus the heater `control:` check
+│   └── saf/                      Simple AF: hooks file, notes (no PAUSE / RESUME)
+├── examples/                     Not installed: servo_wiper.cfg, saf_hooks_example.cfg
 ├── fluidd/                       Fluidd 1.37.7 build + patch (ACE panel, spool picker)
 ├── orca_plugin/                  OrcaSlicer 2.5 "ACE Spool Mapper"
 ├── KlipperScreen/acepro.py       KlipperScreen panel
 ├── slicer/                       Orca helper scripts
 ├── tools/ace_console.py          Serial console for debugging
-├── tests/                        Test suite
+├── tools/validate_config.py      Config check used by the installer
+├── tools/ace_cfg_tool.py         Small config editor used by the installer
+├── tests/                        Driver tests (pytest) and installer tests (tests/installer/run_tests.sh)
 ├── docs/HARDWARE.md              Parts, ACE USB adapter wiring, pinouts
 ├── docs/img/                     Screenshots and diagrams used in this README
 └── img/                          Upstream screenshots (not used in this README)
