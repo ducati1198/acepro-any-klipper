@@ -19,7 +19,7 @@ check() { # description command...
 new_home() { # name -> path of a fake home with Klipper and a printer.cfg
     local h="$ROOT/$1"
     mkdir -p "$h/klipper/klippy/extras" "$h/printer_data/config" "$h/printer_data/logs"
-    printf '[stepper_x]\nstep_pin: PB13\n\n[extruder]\nheater_pin: PA0\ncontrol: pid\n' > "$h/printer_data/config/printer.cfg"
+    printf '[stepper_x]\nstep_pin: PB13\n\n[extruder]\nheater_pin: PA0\ncontrol: pid\n\n#*# <---------------------- SAVE_CONFIG ---------------------->\n#*# DO NOT EDIT THIS BLOCK OR BELOW. The contents are auto-generated.\n#*#\n#*# [heater_bed]\n#*# control = pid\n' > "$h/printer_data/config/printer.cfg"
     echo "$h"
 }
 
@@ -50,6 +50,12 @@ check "include is the first line of printer.cfg"     test "$(head -1 "$C/printer
 check "driver linked"                                test -L "$H/klipper/klippy/extras/ace"
 check "backup manifest exists"                       test -n "$(ls "$H"/acepro-backup/*/manifest.txt 2>/dev/null)"
 check "validator passes on the result"               python3 -I "$REPO/tools/validate_config.py" "$C/printer.cfg" --profile klipper
+check "force_move is above the SAVE_CONFIG block"    test "$(grep -n '^\[force_move\]' "$C/printer.cfg" | cut -d: -f1)" -lt "$(grep -n 'SAVE_CONFIG' "$C/printer.cfg" | cut -d: -f1)"
+check "nothing but #*# lines below SAVE_CONFIG"      test -z "$(sed -n '/SAVE_CONFIG/,$p' "$C/printer.cfg" | grep -v '^#\*#' | grep -v '^$')"
+check "saved block still ends with heater_bed value" test "$(tail -1 "$C/printer.cfg")" = "#*# control = pid"
+printf '[force_move]\nenable_force_move: True\n' >> "$C/printer.cfg"
+check "validator catches lines below SAVE_CONFIG"    bash -c '! python3 -I "$0/tools/validate_config.py" "$1/printer.cfg" >/dev/null' "$REPO" "$C"
+head -n -2 "$C/printer.cfg" > "$C/p.tmp" && mv "$C/p.tmp" "$C/printer.cfg"
 inst "$H" "" --check;  check "--check passes"        test "$RC" -eq 0
 
 echo "2. Undo"

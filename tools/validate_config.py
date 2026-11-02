@@ -106,6 +106,23 @@ def collect(path, res, seen=None, depth=0):
     return items
 
 
+def check_autosave(path, res):
+    """Text below the SAVE_CONFIG marker that is not part of the block breaks the saved values."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            lines = fh.read().split("\n")
+    except OSError:
+        return
+    marker = next((i for i, l in enumerate(lines) if l.strip() == AUTOSAVE_MARK), None)
+    if marker is None:
+        return
+    for no, line in enumerate(lines[marker + 1:], marker + 2):
+        if line.strip() and not line.startswith("#*#"):
+            res.errors.append("%s:%d  this line is BELOW the SAVE_CONFIG block, where Klipper ignores the saved values "
+                              "(heater PID, offsets ...). Move it above the line '#*# <--- SAVE_CONFIG --->'." % (path, no))
+            return
+
+
 def check_jinja(items, res):
     if jinja2 is None:
         res.notes.append("Jinja2 not installed: G-code templates were not syntax-checked")
@@ -188,6 +205,7 @@ def main():
         print("ERROR: %s not found" % args.printer_cfg)
         return 1
     items = collect(args.printer_cfg, res)
+    check_autosave(args.printer_cfg, res)
     check_jinja(items, res)
     check_duplicates(items, res)
     check_consistency(merged(items), res, args.profile)

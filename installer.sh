@@ -597,12 +597,25 @@ ensure_include_in_printer_cfg() {
     print_success "Added [include acepro.cfg] at the top of printer.cfg"
 }
 
+# Lines for printer.cfg must go ABOVE Klipper's SAVE_CONFIG block ("#*# <--- SAVE_CONFIG --->").
+# Anything written below it breaks the saved values (for example Kalico then loses heater_bed "control").
+add_before_save_config() { # file text
+    local f="$1" text="$2" tmp
+    tmp="$(mktemp)"
+    awk -v text="$text" '
+        /^#\*# <-+ SAVE_CONFIG -+>/ && !d { print text; print ""; d=1 }
+        { print }
+        END { if (!d) print text }' "$f" > "$tmp" && cat "$tmp" > "$f"
+    rm -f "$tmp"
+}
+
 ensure_include_line() { # line
     local pc="$CONFIG_DIR/printer.cfg" tmp
     grep -qF "$1" "$pc" && return 0
     backup_path "$pc"
     tmp="$(mktemp)"
-    awk -v line="$1" '{print} /^[[:space:]]*\[include[[:space:]]+acepro\.cfg\]/ && !d {print line; d=1} END{if(!d) print line}' "$pc" > "$tmp" && cat "$tmp" > "$pc" && rm -f "$tmp"
+    awk -v line="$1" '{print} /^[[:space:]]*\[include[[:space:]]+acepro\.cfg\]/ && !d {print line; d=1} END{if(!d) print "MISSING-ACE-INCLUDE"}' "$pc" > "$tmp" && cat "$tmp" > "$pc" && rm -f "$tmp"
+    if grep -qx "MISSING-ACE-INCLUDE" "$pc"; then sed -i '/^MISSING-ACE-INCLUDE$/d' "$pc"; add_before_save_config "$pc" "$1"; fi
     print_success "Added $1 to printer.cfg"
 }
 
@@ -615,7 +628,7 @@ ensure_force_move() {
         return 0
     fi
     backup_path "$pc"
-    printf '\n[force_move]\nenable_force_move: True\n' >> "$pc"
+    add_before_save_config "$pc" "$(printf '[force_move]\nenable_force_move: True')"
     print_success "Added [force_move] enable_force_move: True to printer.cfg (CUT_TIP needs it)"
 }
 

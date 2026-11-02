@@ -10,6 +10,7 @@
 - **Simple AF:** never edits `moonraker.conf`; puts files where its overrides backup finds them; writes the ACE hooks file only when you have no hooks of your own.
 - **Simple AF pause/resume follow the `ACE_Pro` switch** through `_SAF_ON_PAUSE` / `_SAF_ON_RESUME` → `_ACE_ON_PAUSE` / `_ACE_ON_RESUME`. Switch off = plain Simple AF. Simple AF's own PAUSE/RESUME stay in charge.
 - **Simple AF hooks file is `my_saf_hooks.cfg`.** The installer asks whether to add its include line or leave that to you; an existing file is updated (`ZERO_OUT_SERVO` and the encoder line at the top of each hook, except `ZERO_OUT_SERVO` in `_SAF_END_PRINT_START`; your lines kept), the encoder lines are added or removed to match the sensor you chose.
+- **Fix:** lines added to `printer.cfg` (`[force_move]`) now go above Klipper's SAVE_CONFIG block, not below it. Below it they broke the saved values (Kalico stopped with `pid_profile: 'control' has to be specified`). The config check now reports any text below that block.
 - **Servo is optional.** `[servo servo_wipe]` moved to `acepro_servo.cfg`; `servo_enable`, `cutter_enable` and `poop_enable` switch the matching macros off.
 - **PAUSE / RESUME stay in `acepro_printer_macros.cfg`** for all profiles. On Simple AF, `client.cfg` loads later and its versions win.
 - **Fix:** `PUSHOVER_ENCODER_SENSOR` is now defined (does nothing until you define your own), so a sensor alert no longer fails with "Unknown command" on a fresh install.
