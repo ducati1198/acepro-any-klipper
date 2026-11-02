@@ -125,8 +125,14 @@ printf '[gcode_macro _SAF_START_PRINT_END]\ngcode:\n   M117 start\n   SFS_ENABLE
 printf '[gcode_macro _SAF_ON_RESUME]\ngcode:\n  M117 mine\n' > "$C/my_other.cfg"
 inst "$H" '3\n1\nPA4\nn\ny\nPF1\ny\nPB14\ny\ny\nn\nn\nn\ny\n'
 check "installer finished"                           test "$RC" -eq 0
-check "encoder line moved to the top"                test "$(awk '/^\[gcode_macro _SAF_START_PRINT_END\]/{f=1;next} f&&/^gcode:/{g=1;next} g{print $1; exit}' "$C/my_saf_hooks.cfg")" = "SFS_ENABLE_ACE_ENCODER"
-check "disable-encoder added at the top elsewhere"   test "$(awk '/^\[gcode_macro _SAF_END_PRINT_START\]/{f=1;next} f&&/^gcode:/{g=1;next} g{print $1; exit}' "$C/my_saf_hooks.cfg")" = "SFS_DISABLE_ACE_ENCODER"
+nth() { awk -v m="$2" -v n="$3" '$0=="[gcode_macro " m "]"{f=1;next} f&&/^gcode:/{g=1;next} g&&$1!~/^#/&&NF{c++; if(c==n){print $1; exit}}' "$1"; }
+check "ZERO_OUT_SERVO first in START_PRINT_END"      test "$(nth "$C/my_saf_hooks.cfg" _SAF_START_PRINT_END 1)" = "ZERO_OUT_SERVO"
+check "encoder line second (moved up)"               test "$(nth "$C/my_saf_hooks.cfg" _SAF_START_PRINT_END 2)" = "SFS_ENABLE_ACE_ENCODER"
+check "END_PRINT_START: encoder first"               test "$(nth "$C/my_saf_hooks.cfg" _SAF_END_PRINT_START 1)" = "SFS_DISABLE_ACE_ENCODER"
+check "END_PRINT_START: ZERO_OUT_SERVO NOT on top"   test "$(nth "$C/my_saf_hooks.cfg" _SAF_END_PRINT_START 1)" != "ZERO_OUT_SERVO"
+check "END_PRINT_START: ZERO_OUT_SERVO added below"  test "$(nth "$C/my_saf_hooks.cfg" _SAF_END_PRINT_START 2)" = "ZERO_OUT_SERVO"
+check "ZERO_OUT_SERVO at the top of CANCEL"          test "$(nth "$C/my_saf_hooks.cfg" _SAF_ON_CANCEL 1)" = "ZERO_OUT_SERVO"
+check "ZERO_OUT_SERVO in the other hooks"            bash -c 'for m in _SAF_HOMING_START _SAF_HEATING_BED_START _SAF_BED_MESH_END _SAF_HEATING_NOZZLE_END _SAF_END_PRINT_END _SAF_ON_PAUSE; do awk -v m="$m" "\$0==\"[gcode_macro \" m \"]\"{f=1;next} f&&/^gcode:/{g=1;next} g&&NF{print \$1; exit}" "$0" | grep -qx ZERO_OUT_SERVO || exit 1; done' "$C/my_saf_hooks.cfg"
 check "your lines kept"                              bash -c 'grep -q "M117 more" "$0" && grep -q "M117 end" "$0"' "$C/my_saf_hooks.cfg"
 check "hook defined elsewhere not added"             test -z "$(grep '_SAF_ON_RESUME' "$C/my_saf_hooks.cfg")"
 check "hook defined elsewhere is listed"             grep -q "_SAF_ON_RESUME" <<<"$OUT"

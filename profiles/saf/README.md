@@ -6,7 +6,7 @@ What the installer does differently on Simple AF (Pellcorp):
 - Puts every file in the main config folder (not a subfolder), so Simple AF's `pellcorp-overrides`
   backup keeps them across `installer.sh --update`.
 - Never edits `moonraker.conf`, `client.cfg`, `start_end.cfg` or other files Simple AF owns.
-- Writes or UPDATES `my_saf_hooks.cfg`: your own lines stay, the ACE lines are added at the top of each hook.
+- Writes or UPDATES `my_saf_hooks.cfg`: your own lines stay, the ACE lines are added at the top of each hook (`ZERO_OUT_SERVO` first, then the encoder line; in `_SAF_END_PRINT_START` the encoder line is first and `ZERO_OUT_SERVO` stays below it).
   The encoder lines are kept only if you have the encoder sensor. Hooks defined in another file are listed, not touched.
   Asks whether to add `[include my_saf_hooks.cfg]` to printer.cfg or leave that to you (Fluidd).
 - The print start line is `MY_START_PRINT TOOL=... ` (it hands off to Simple AF's `START_PRINT`).

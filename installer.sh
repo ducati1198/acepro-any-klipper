@@ -424,13 +424,14 @@ stage_files() {
     # if you have the ACE encoder sensor.
     HOOKS_SUMMARY=""; HOOKS_ELSEWHERE=""
     if [ "$SAF_HOOKS" = "yes" ]; then
-        local enc=$HAVE_ENCODER cur="-"
+        local enc=$HAVE_ENCODER srv=$HAVE_SERVO cur="-"
         if [ "$UPDATING" = 1 ]; then
             enc=0; grep -qE '^\[filament_motion_sensor ace_encoder\]' "$(OLD acepro.cfg)" 2>/dev/null && enc=1
+            srv=0; { [ -f "$(OLD acepro_servo.cfg)" ] || grep -qE '^\[servo servo_wipe\]' "$(OLD acepro_macros.cfg)" 2>/dev/null; } && srv=1
         fi
         [ -f "$CONFIG_DIR/$HOOKS_FILE" ] && cur="$CONFIG_DIR/$HOOKS_FILE"
         HOOKS_ELSEWHERE="$(hooks_defined_elsewhere)"
-        HOOKS_SUMMARY="$(cfg_tool hooks "$(profile_file my_saf_hooks.cfg)" "$cur" "$STAGE/$HOOKS_FILE" "$enc" "$HOOKS_ELSEWHERE")"
+        HOOKS_SUMMARY="$(cfg_tool hooks "$(profile_file my_saf_hooks.cfg)" "$cur" "$STAGE/$HOOKS_FILE" "$enc" "$HOOKS_ELSEWHERE" "$srv")"
     fi
 
     [ "$WANT_SPOOLMAN" = 1 ] && cp "$SCRIPT_DIR/config/spoolman_logic.cfg" "$STAGE/spoolman_logic.cfg"

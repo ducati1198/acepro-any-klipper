@@ -6,7 +6,7 @@
   ace_cfg_tool.py comment  FILE SECTION [NOTE]         comment out a section (up to the next blank line)
   ace_cfg_tool.py carry    OLD NEW                     copy your values from OLD into NEW (NEW is rewritten)
   ace_cfg_tool.py servo    OLD                         print the [servo servo_wipe] block found in OLD
-  ace_cfg_tool.py hooks    TEMPLATE TARGET OUT ENCODER [SKIP]  put the ACE lines at the TOP of each Simple AF hook macro
+  ace_cfg_tool.py hooks    TEMPLATE TARGET OUT ENCODER [SKIP [SERVO]]  put the ACE lines at the TOP of each Simple AF hook macro
                                                        (TARGET = your file or '-'; ENCODER 1|0; SKIP = macros defined elsewhere)
   ace_cfg_tool.py hooknames TEMPLATE                   list the hook macros of the template
   ace_cfg_tool.py hookcmds TEMPLATE NAME               list the ACE commands the template puts in one hook
@@ -160,10 +160,13 @@ def parse_hook_template(lines):
     for name, body in macros:
         items, blk = [], None
         for line in body:
-            txt = line.strip()
-            enc = "#ENCODER" in txt
-            if enc:
-                txt = txt.replace("#ENCODER ", "# ").replace("#ENCODER", "").rstrip()
+            txt = line.rstrip()
+            tags = set()
+            m = re.search(r"\s*#@([A-Z,]+)\s*$", txt)
+            if m:
+                tags = set(m.group(1).split(","))
+                txt = txt[: m.start()].rstrip()
+                line = txt
             if blk is not None:
                 blk["lines"].append(line.rstrip())
                 if not blk["key"] and _first_word(line):
@@ -172,10 +175,12 @@ def parse_hook_template(lines):
                     items.append(blk)
                     blk = None
                 continue
-            if txt.startswith("{%"):
-                blk = {"key": "", "lines": [line.rstrip()], "encoder": False}
+            if txt.strip().startswith("{%"):
+                blk = {"key": "", "lines": [line.rstrip()], "encoder": False, "top": False, "servo": False, "ifexists": False}
                 continue
-            items.append({"key": _first_word(txt), "lines": [txt], "encoder": enc})
+            items.append({"key": _first_word(txt), "lines": [txt.strip()], "encoder": "ENCODER" in tags,
+                          "top": "TOP" in tags or "ENCODER" in tags, "servo": "SERVO" in tags,
+                          "ifexists": "IFEXISTS" in tags})
         out.append((name, items))
     return header, out
 
@@ -195,15 +200,16 @@ def _render(item, indent):
     return [indent + l[base:] if l.strip() else l for l in ls]
 
 
-def cmd_hooks(template, target, out, encoder, skip=""):
+def cmd_hooks(template, target, out, encoder, skip="", servo="1"):
     """Write the Simple AF hooks file: ACE lines go to the TOP of each hook macro.
 
     TARGET is your existing file ('-' if there is none). Everything in it that is not an ACE line is
     kept as it is; macros it lacks are added at the end. ENCODER is 1 or 0: with 0 the
-    SFS_ENABLE/DISABLE_ACE_ENCODER lines are removed. SKIP is a comma list of macros that are
-    defined in another file (they are not touched here).
+    SFS_ENABLE/DISABLE_ACE_ENCODER lines are removed. SERVO is 1 or 0: with 0 no ZERO_OUT_SERVO line is
+    added (existing ones stay). SKIP is a comma list of macros defined in another file (not touched).
     """
     keep_encoder = encoder == "1"
+    keep_servo = servo == "1"
     skipped = set(x for x in skip.split(",") if x)
     header, macros = parse_hook_template(read(template))
     exists = target != "-" and os.path.exists(target)
@@ -215,9 +221,12 @@ def cmd_hooks(template, target, out, encoder, skip=""):
     report = []
 
     def want(item):
-        return keep_encoder or not item["encoder"]
+        if item["encoder"] and not keep_encoder:
+            return False
+        if item["servo"] and not keep_servo:
+            return False
+        return True
 
-    # index macros in the target
     def find_macro(name):
         start = None
         for i, line in enumerate(lines):
@@ -238,7 +247,7 @@ def cmd_hooks(template, target, out, encoder, skip=""):
             continue
         found = find_macro(name)
         if found is None:
-            use = [i for i in items if want(i)]
+            use = [i for i in items if want(i) and not i["ifexists"]]
             if not any(i["key"] for i in use):
                 continue
             if lines and lines[-1].strip():
@@ -262,36 +271,43 @@ def cmd_hooks(template, target, out, encoder, skip=""):
         body = lines[gi + 1:end]
         indent = _indent_of(body)
         moved, added, removed = [], [], []
-        # encoder lines: always the first lines of the macro
         top = []
+        # lines that belong at the top, in the order the template lists them
         for item in items:
-            if not item["encoder"]:
+            if not item["top"]:
                 continue
             cmd = item["key"]
-            existing = [l for l in body if _first_word(l) == cmd]
-            body = [l for l in body if _first_word(l) != cmd]
-            if keep_encoder:
-                top.append(existing[0] if existing else indent + item["lines"][0].strip())
-                (moved if existing else added).append(cmd)
-            elif existing:
-                removed.append(cmd)
-        # encoder lines of the other direction that the template does not list for this macro
-        if not keep_encoder:
+            if not want(item):
+                if item["encoder"]:                       # no encoder sensor: take the line out
+                    gone = [l for l in body if _first_word(l) == cmd]
+                    body = [l for l in body if _first_word(l) != cmd]
+                    removed.extend([cmd] * len(gone))
+                continue
+            idx = next((n for n, l in enumerate(body) if _first_word(l) == cmd), None)
+            if idx is not None:
+                existing = body.pop(idx)
+                if item["encoder"]:                       # encoder: no duplicates
+                    body = [l for l in body if _first_word(l) != cmd]
+                top.append(existing)
+                moved.append(cmd)
+            else:
+                top.append(indent + item["lines"][0].strip())
+                added.append(cmd)
+        if not keep_encoder:                              # leftovers of the other direction
             for l in list(body):
                 if _first_word(l) in ENCODER_CMDS:
                     body.remove(l)
                     removed.append(_first_word(l))
-        # the other ACE lines, only when missing
+        # lines that are only added when missing (they keep their place if you have them)
         for item in items:
-            if item["encoder"] or not item["key"]:
+            if item["top"] or not item["key"] or not want(item):
                 continue
-            present = any(_first_word(l) == item["key"] for l in body)
-            if not present:
+            if not any(_first_word(l) == item["key"] for l in body + top):
                 top.extend(_render(item, indent))
                 added.append(item["key"])
         before = lines[gi + 1:end]
         if top + body == before:
-            continue                         # already as wanted: leave the file as it is
+            continue                                      # already as wanted: leave the file as it is
         lines[gi + 1:end] = top + body
         bits = []
         if added:
@@ -300,8 +316,7 @@ def cmd_hooks(template, target, out, encoder, skip=""):
             bits.append("moved to top " + ", ".join(moved))
         if removed:
             bits.append("removed " + ", ".join(removed))
-        if bits:
-            report.append("UPDATED %s: %s" % (name, "; ".join(bits)))
+        report.append("UPDATED %s: %s" % (name, "; ".join(bits)))
     if not exists:
         text = "\n".join(lines).rstrip("\n") + "\n"
     else:
@@ -342,7 +357,7 @@ def main(argv):
             return cmd_carry(*a)
         if c == "servo" and len(a) == 1:
             return cmd_servo(*a)
-        if c == "hooks" and len(a) in (4, 5):
+        if c == "hooks" and len(a) in (4, 5, 6):
             return cmd_hooks(*a)
         if c == "hooknames" and len(a) == 1:
             return cmd_hooknames(*a)
