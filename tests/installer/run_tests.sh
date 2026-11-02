@@ -314,6 +314,29 @@ inst "$H" "" --doctor
 check "second run is clean"                          grep -q "No problems found" <<<"$OUT"
 inst "$H" 'y\n' --undo
 
+echo "25. Software Updates entry and what changed"
+H="$(new_home t25)"; C="$(cfg "$H")"
+printf '[server]\nhost: 0.0.0.0\n' > "$C/moonraker.conf"
+inst "$H" "$A_KLIPPER"
+check "update_manager entry added"                   grep -q '^\[update_manager acepro\]' "$C/moonraker.conf"
+check "points at this clone"                         grep -q "^path: $REPO" "$C/moonraker.conf"
+check "user's moonraker lines kept"                  grep -q '^host: 0.0.0.0' "$C/moonraker.conf"
+inst "$H" 'y\n' --update
+check "second run adds it only once"                 test "$(grep -c '^\[update_manager acepro\]' "$C/moonraker.conf")" -eq 1
+sed -i 's/^VERSION=.*/VERSION="1.0.0"/' "$C/acepro-install.conf"
+inst "$H" 'y\ny\ny\ny\n' --update
+check "update lists what changed"                    grep -q "What changed since v1.0.0" <<<"$OUT"
+check "lists the new version's entries"              grep -q "ACE_SELFTEST" <<<"$OUT"
+inst "$H" 'y\ny\ny\ny\n' --update
+check "same version: nothing new"                    grep -q "Nothing new since your last install" <<<"$OUT"
+inst "$H" 'y\n' --uninstall
+check "uninstall removes the entry"                  test -z "$(grep 'update_manager acepro' "$C/moonraker.conf")"
+check "uninstall keeps your moonraker lines"         grep -q '^host: 0.0.0.0' "$C/moonraker.conf"
+H="$(new_home t25s)"; C="$(cfg "$H")"; mkdir -p "$H/pellcorp"
+printf '[server]\nhost: 0.0.0.0\n' > "$C/moonraker.conf"
+inst "$H" '3\n1\nPA4\nn\ny\nPF1\ny\nPB14\ny\ny\nn\nn\ny\ny\nn\n'
+check "Simple AF: asked first, said no, nothing added" test -z "$(grep 'update_manager acepro' "$C/moonraker.conf")"
+
 echo
 echo "14. [force_move] already in another file is not added twice"
 H="$(new_home t14)"; C="$(cfg "$H")"

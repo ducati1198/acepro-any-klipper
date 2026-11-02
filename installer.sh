@@ -70,6 +70,7 @@ UPDATING=0            # 1 = an ACE install was found and we keep its values
 STAGE=""
 BACKUP_DIR=""
 MOONRAKER_RESTART_NEEDED=0
+OLD_VERSION=""
 FLUIDD_DIR=""
 HOOKS_INCLUDE="auto"      # auto = installer adds the include line, manual = you add it in Fluidd, present = already included
 HOOKS_FILE="my_saf_hooks.cfg"
@@ -673,6 +674,64 @@ show_plan() {
     [ "$WANT_KS" = 1 ] && echo "  PANEL   KlipperScreen ACE menu"
 }
 
+# ============================================================================
+# Update manager entry (Fluidd / Mainsail "Software Updates") and "what changed"
+# ============================================================================
+
+ensure_update_manager() {
+    local mc="$CONFIG_DIR/moonraker.conf" origin
+    [ -f "$mc" ] || { print_info "No moonraker.conf here, so no entry in Software Updates."; return 0; }
+    if grep -qE '^\[update_manager[[:space:]]+acepro\]' "$mc"; then print_success "Software Updates already lists acepro"; return 0; fi
+    [ -d "$SCRIPT_DIR/.git" ] || { print_info "This download is not a git clone, so no Software Updates entry."; return 0; }
+    if [ "$PROFILE" = "saf" ]; then
+        print_info "Simple AF may overwrite moonraker.conf when it updates, which would remove this entry."
+        ask_yn "Add acepro to Software Updates in moonraker.conf anyway? (saved first)" N || return 0
+    fi
+    origin="$(git -C "$SCRIPT_DIR" remote get-url origin 2>/dev/null || echo https://github.com/ducati1198/acepro-any-klipper.git)"
+    backup_path "$mc"
+    cat >> "$mc" <<EOF
+
+[update_manager acepro]
+type: git_repo
+path: $SCRIPT_DIR
+origin: $origin
+primary_branch: $(git -C "$SCRIPT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo dev)
+managed_services: klipper
+# This only downloads new driver code. After an update run:  ./installer.sh --update
+EOF
+    MOONRAKER_RESTART_NEEDED=1
+    print_success "Added acepro to Software Updates (moonraker.conf). It shows after Moonraker restarts."
+}
+
+show_changes() { # old_version
+    local old="$1"
+    [ -f "$SCRIPT_DIR/CHANGELOG.md" ] || return 0
+    if [ -z "$old" ]; then return 0; fi
+    if [ "$old" = "$VERSION" ]; then print_info "Already on v$VERSION. Nothing new since your last install."; return 0; fi
+    echo; print_info "What changed since v$old:"
+    python3 -I - "$SCRIPT_DIR/CHANGELOG.md" "$old" "$VERSION" <<'PYEOF'
+import re, sys
+path, old, new = sys.argv[1:4]
+def key(v):
+    return tuple(int(x) for x in re.findall(r"\d+", v)[:3]) or (0,)
+text = open(path, encoding="utf-8", errors="replace").read()
+parts = re.split(r"^## ", text, flags=re.M)[1:]
+shown = 0
+for part in parts:
+    head, _, body = part.partition("\n")
+    ver = head.split()[0]
+    if key(old) < key(ver) <= key(new):
+        print("  v" + head.strip())
+        for line in body.strip().split("\n"):
+            if line.startswith("- "):
+                line = re.sub(r"\*\*(.+?)\*\*", r"\1", line)
+                print("    " + line[:200])
+        shown += 1
+if not shown:
+    print("  (no entries in CHANGELOG.md for this range)")
+PYEOF
+}
+
 # A file that uses "virtual_pin:" before [virtual_pins] is loaded stops Klipper with
 # "Unknown pin chip name 'virtual_pin'". Warn, and fix it only if you say yes.
 check_virtual_pin_order() {
@@ -1046,6 +1105,7 @@ do_install() {
             die_with_fix "there is no ACE install to update in $CONFIG_DIR" "run   ./installer.sh   to install first."
         fi
         if [ "$UPDATING" = 1 ]; then
+            OLD_VERSION="$(kv_get "$(CONF_FILE)" VERSION || true)"
             PROFILE="${saved:-}"
             if [ -z "$PROFILE" ]; then
                 print_info "I do not know which software this install was made for."
@@ -1115,12 +1175,14 @@ do_install() {
     [ "$WANT_KS" = 1 ] && setup_klipperscreen
     [ -f "$(CONF_FILE)" ] && backup_path "$(CONF_FILE)" || echo "NEW $(CONF_FILE)" >> "$BACKUP_DIR/manifest.txt"
     save_answers
+    ensure_update_manager
     check_virtual_pin_order || true
 
     local stale; stale="$(stale_backup_links)"
     [ -n "$stale" ] && warn_later "Old backup links sit in Klipper's extras folder (ace_backup_*). They are harmless; ./installer.sh --repair removes them."
 
     restart_and_selftest
+    [ "$UPDATING" = 1 ] && show_changes "$OLD_VERSION"
     final_steps
 }
 
@@ -1211,6 +1273,7 @@ do_uninstall() {
     is_symlink "$ks" && echo "  LINK   $ks"
     grep -q 'menu __main acepro\]\|menu __print acepro\]' "$ksconf" 2>/dev/null && echo "  EDIT   KlipperScreen.conf (the ACE Pro menu entries)"
     include_present && echo "  EDIT   printer.cfg (the [include acepro.cfg] line)"
+    grep -qE '^\[update_manager[[:space:]]+acepro\]' "$CONFIG_DIR/moonraker.conf" 2>/dev/null && echo "  EDIT   moonraker.conf (the [update_manager acepro] entry)"
     if [ "$SAF_HOOKS" = "yes" ] && [ -f "$CONFIG_DIR/$HOOKS_FILE" ]; then
         tpl="$(profile_file my_saf_hooks.cfg)"
         tmp="$(mktemp)"
@@ -1249,6 +1312,10 @@ do_uninstall() {
         fi
     fi
     remove_include_lines "$CONFIG_DIR/printer.cfg"
+    if grep -qE '^\[update_manager[[:space:]]+acepro\]' "$CONFIG_DIR/moonraker.conf" 2>/dev/null; then
+        backup_path "$CONFIG_DIR/moonraker.conf"
+        cfg_tool rmsection "$CONFIG_DIR/moonraker.conf" "update_manager acepro" && print_success "Removed acepro from Software Updates"
+    fi
     for f in "${UNINSTALL_FILES[@]}"; do
         if [ -e "$CONFIG_DIR/$f" ]; then backup_path "$CONFIG_DIR/$f"; rm -f "$CONFIG_DIR/$f"; print_success "Removed $f"; fi
     done
@@ -1444,7 +1511,7 @@ do_repair() {
 do_undo() {
     local dir="${1:-}" line kind a b
     [ "$DRY" = 1 ] || guard_not_printing
-    [ -n "$dir" ] || dir="$(ls -d "$BACKUP_ROOT"/*/ 2>/dev/null | sort | tail -1)"
+    [ -n "$dir" ] || dir="$(ls -d "$BACKUP_ROOT"/*/ 2>/dev/null | sed 's#/$##' | sort | tail -1)"
     dir="${dir%/}"
     [ -n "$dir" ] && [ -f "$dir/manifest.txt" ] || die_with_fix "there is no backup to restore in $BACKUP_ROOT" "backups are made by ./installer.sh before it changes anything"
     echo "Restoring from: $dir"

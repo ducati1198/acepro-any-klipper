@@ -357,7 +357,11 @@ filament_runout_sensor_name_rdm: filament_runout_rdm
 
 ### 4.3 Positions to measure on your printer
 
-Edit these in `_ACE_VARS` (`acepro_macros.cfg`):
+**Easiest: the wizard in Fluidd.** Run `ACE_SETUP_CUTTER` or `ACE_SETUP_BUCKET` in the console. It homes X and Y if needed, then lists the points. You jog the head with Fluidd's jog buttons and save each point with `ACE_SETUP_SAVE POINT=<name>` (names: `cut_block`, `cut_engage`, `cut_full`, `poop`, `osc_start`, `osc_stop`, `wipe_start`). Each save writes the X/Y into `acepro_macros.cfg` and into the running macros, so no restart is needed (the first time, the old file is kept as `acepro_macros.cfg.before-setup`). When you are sure, run `ACE_SETUP_CONFIRM` to unlock the cutter, bucket and wipe moves. The wizard is refused during a print and never moves the head except to home X and Y.
+
+Run `ACE_SELFTEST` any time for a read-only health check: the driver, each unit's connection, temperatures, sensors, whether positions are confirmed, and the switches. Nothing moves.
+
+**By hand:** edit these in `_ACE_VARS` (`acepro_macros.cfg`):
 
 - **Cutter:** `cut_block_*`, `cut_engage_*`, `cut_full_*` (use the calibration in section 9).
 - **Poop bucket:** `poop_x`, `poop_y`, plus the shake and oscillation values.
@@ -628,6 +632,8 @@ The cut itself does a pre-cut retract (`pre_cut_retract_length`, 2 mm, done in r
 | Command | Description |
 |---|---|
 | `ACE_GET_STATUS` | Status of all units (temperature, slots, dryer) |
+| `ACE_SELFTEST` | Read-only health check of the install. Nothing moves. |
+| `ACE_SETUP_CUTTER` / `ACE_SETUP_BUCKET` | Position wizard (section 4.3). Then `ACE_SETUP_SAVE POINT=<name>` and `ACE_SETUP_CONFIRM`. |
 | `ACE_QUERY_SLOTS` | Every slot with material and colour |
 | `ACE_CHANGE_TOOL TOOL=<n>` | Change to tool *n* (`-1` unloads) |
 | `ACE_SET_SLOT …` | Set a slot's material, colour, temperature and preset name |
@@ -736,6 +742,10 @@ cd acepro-any-klipper && ./installer.sh --update
 ```
 
 `--update` takes the new code and keeps your values: positions, speeds, sensor pins, the servo pin and which optional parts you left out. It also moves a `[servo servo_wipe]` section or `PAUSE` / `RESUME` from an older single-file install into the new files. If you edited the *code* of a macro (not just its values), that edit is not carried over; your old file is in the backup. The installer tells you when a newer version is on GitHub.
+
+### Software Updates and "what changed"
+
+The installer adds `[update_manager acepro]` to `moonraker.conf` (saved first), so the repo shows up in Fluidd's Software Updates page and you can pull new driver code there. On Simple AF it asks first, because Simple AF may overwrite `moonraker.conf`. The page only downloads code; run `./installer.sh --update` afterwards to refresh the config files. After `--update` the installer prints the `CHANGELOG.md` entries newer than the version you had.
 
 ### Undo
 

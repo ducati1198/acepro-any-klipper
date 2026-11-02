@@ -15,6 +15,7 @@ from . import ace2_ota
 from . import connection_pause
 from . import monitor_events
 from . import print_tools
+from . import setup_tools
 from .version import get_driver_version
 from .config import (
     ACE_INSTANCES,
@@ -2791,5 +2792,5 @@ def register_all_commands(printer):
     """Register all ACE gcode commands with Klipper."""
     gcode = printer.lookup_object("gcode")
 
-    for cmd_name, cmd_handler, cmd_desc in ACE_COMMANDS:
+    for cmd_name, cmd_handler, cmd_desc in list(ACE_COMMANDS) + setup_tools.make_commands(lambda: printer):
         gcode.register_command(cmd_name, safe_gcode_command(cmd_handler), desc=cmd_desc)

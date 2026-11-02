@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.1.0 (safer installs, uninstall, doctor, position wizard)
+
+- **One ACE temperature sensor per unit.** With 1 unit you get `acepro_temp_1`, with 2 you also get `acepro_temp_2`, with 3 you get `acepro_temp_3`. The extra ones are commented out.
+- **Refuses to run while a print is active** (printing or paused). No override. `--check`, `--support-bundle` and `--dry-run` still work.
+- **Virtual-pin order warning.** If a file uses `virtual_pin:` before `[virtual_pins]` is loaded (Klipper: "Unknown pin chip name 'virtual_pin'"), the installer and the config check say so; the installer offers to add `[virtual_pins]` at the top of `printer.cfg` (saved first, only on yes).
+- **ACE USB check.** Warns if no ACE shows up on USB, then carries on.
+- **More folder layouts:** `printer_data` in another place, several Klipper instances (you pick one; service `klipper-N`), and Creality K1 native `/usr/data` (experimental, no systemd or sudo). Also checks sudo and the Klipper service name.
+- **`--uninstall`** removes what the installer added (ACE files, driver links, KlipperScreen link and menu, include line, the ACE lines in `my_saf_hooks.cfg`). Your own lines stay. Saved first; `--undo` brings it back.
+- **`--doctor`** finds problems (missing include, broken links, lines below SAVE_CONFIG, virtual-pin order, duplicate macros), explains them and offers a fix with a backup. Acts only on yes.
+- **Import old values:** a fresh install searches earlier installs and backups, shows what differs, and asks which one to copy your values from.
+- **Position wizard in Fluidd:** `ACE_SETUP_CUTTER` and `ACE_SETUP_BUCKET` walk you through the points; you jog the head, `ACE_SETUP_SAVE POINT=<name>` writes the X/Y into `acepro_macros.cfg` (no restart needed; the old file is kept as `acepro_macros.cfg.before-setup`), `ACE_SETUP_CONFIRM` unlocks the moves. Refused during a print.
+- **`ACE_SELFTEST`:** read-only check of the driver, each unit's connection, temperatures, sensors, confirmed positions and the switches. Nothing moves.
+- **Software Updates entry:** the installer adds `[update_manager acepro]` to `moonraker.conf` (saved first; on Simple AF it asks first because Simple AF may overwrite that file). It only downloads new code; run `./installer.sh --update` after.
+- **"What changed" after `--update`:** the entries of this file newer than your installed version are shown.
+
 ## 1.0.0 (installer for Klipper, Kalico and Simple AF)
 
 - **One installer, three setups.** It asks Klipper, Kalico or Simple AF (and suggests one by looking at the Pi), then installs the right files. Profiles live in `profiles/`.
@@ -17,12 +32,4 @@
 - **Fix:** `PUSHOVER_ENCODER_SENSOR` is now defined (does nothing until you define your own), so a sensor alert no longer fails with "Unknown command" on a fresh install.
 - **Fix:** removed the `SMART_TOOL` branch from `MY_START_PRINT`; the macro never existed.
 - **Examples (not installed):** `examples/servo_wiper.cfg`, `examples/saf_hooks_example.cfg`.
-- **One ACE temperature sensor per unit.** With 1 unit you get `acepro_temp_1`, with 2 you also get `acepro_temp_2`, with 3 you get `acepro_temp_3`. The extra ones are commented out.
-- **Refuses to run while a print is active** (printing or paused). No override. `--check`, `--support-bundle` and `--dry-run` still work.
-- **Virtual-pin order warning.** If a file uses `virtual_pin:` before `[virtual_pins]` is loaded (Klipper: "Unknown pin chip name 'virtual_pin'"), the installer and the config check say so; the installer offers to add `[virtual_pins]` at the top of `printer.cfg` (saved first, only on yes).
-- **ACE USB check.** Warns if no ACE shows up on USB, then carries on.
-- **More folder layouts:** `printer_data` in another place, several Klipper instances (you pick one; service `klipper-N`), and Creality K1 native `/usr/data` (experimental, no systemd or sudo). Also checks sudo and the Klipper service name.
-- **`--uninstall`** removes what the installer added (ACE files, driver links, KlipperScreen link and menu, include line, the ACE lines in `my_saf_hooks.cfg`). Your own lines stay. Saved first; `--undo` brings it back.
-- **`--doctor`** finds problems (missing include, broken links, lines below SAVE_CONFIG, virtual-pin order, duplicate macros), explains them and offers a fix with a backup. Acts only on yes.
-- **Import old values:** a fresh install searches earlier installs and backups, shows what differs, and asks which one to copy your values from.
 - **Tests:** `bash tests/installer/run_tests.sh` runs the installer against fake folders.
