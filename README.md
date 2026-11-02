@@ -201,6 +201,16 @@ chmod +x installer.sh
 ./installer.sh
 ```
 
+> **"destination path 'acepro-any-klipper' already exists"?** You already downloaded it once. Do not clone again. Update the folder instead:
+>
+> ```bash
+> cd ~/acepro-any-klipper
+> git pull
+> ./installer.sh --update
+> ```
+>
+> If `git pull` complains about local changes, see [section 13](#13-update-and-undo).
+
 The installer asks a few plain questions, shows exactly what it will change, and only then does it. It saves a backup first, so `./installer.sh --undo` puts everything back.
 
 **The questions** (each has a one-line reason and a safe default):
@@ -686,10 +696,34 @@ More: [`CONNECTION_SUPERVISION.md`](CONNECTION_SUPERVISION.md).
 
 ### Update from GitHub
 
+Run this on the Pi (over SSH) to bring the newest version to your printer:
+
 ```bash
 cd ~/acepro-any-klipper
 git pull
 ./installer.sh --update
+```
+
+- `git pull` downloads the new files into the folder. Nothing in your printer config changes yet.
+- `./installer.sh --update` installs them, keeps your settings, saves a backup first, and restarts Klipper if you say yes.
+- Check what you have with `cat VERSION` (it prints the version; an older download has no `VERSION` file).
+- Not sure it worked? `./installer.sh --check` looks for problems and changes nothing.
+
+**`git pull` says "Your local changes would be overwritten"?** You edited a file inside the `acepro-any-klipper` folder itself (not in `printer_data/config`). Keep your edit aside and pull:
+
+```bash
+git stash
+git pull
+git stash pop      # put your edit back (skip this if you do not need it)
+```
+
+**The folder is damaged or you want a clean copy?** Move it away and clone again. Your printer config is not in this folder, so it is not affected:
+
+```bash
+cd ~
+mv acepro-any-klipper acepro-any-klipper.old
+git clone -b dev https://github.com/ducati1198/acepro-any-klipper
+cd acepro-any-klipper && ./installer.sh --update
 ```
 
 `--update` takes the new code and keeps your values: positions, speeds, sensor pins, the servo pin and which optional parts you left out. It also moves a `[servo servo_wipe]` section or `PAUSE` / `RESUME` from an older single-file install into the new files. If you edited the *code* of a macro (not just its values), that edit is not carried over; your old file is in the backup. The installer tells you when a newer version is on GitHub.
