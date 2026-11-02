@@ -245,6 +245,75 @@ check "validator flags it"                           bash -c 'python3 -I "$0/too
 inst "$H" "$A_KLIPPER"
 check "after install the order is fine"              bash -c '! python3 -I "$0/tools/validate_config.py" "$1/printer.cfg" | grep -q "before \[virtual_pins\]"' "$REPO" "$C"
 
+echo "21. Uninstall (Klipper) and undo"
+H="$(new_home t21)"; C="$(cfg "$H")"
+cp "$C/printer.cfg" "$ROOT/t21.orig"
+inst "$H" "$A_KLIPPER"
+check "installed"                                    test -f "$C/acepro.cfg"
+inst "$H" "" --uninstall --dry-run
+check "dry run removes nothing"                      test -f "$C/acepro.cfg"
+inst "$H" 'y\n' --uninstall
+check "uninstall finished"                           test "$RC" -eq 0
+for f in acepro.cfg acepro_setting.cfg acepro_macros.cfg acepro_printer_macros.cfg acepro_servo.cfg acepro-install.conf; do
+    check "$f removed"                               test ! -e "$C/$f"
+done
+check "driver link removed"                          test ! -e "$H/klipper/klippy/extras/ace" -a ! -L "$H/klipper/klippy/extras/ace"
+check "include line removed"                         test -z "$(grep 'include acepro.cfg' "$C/printer.cfg")"
+check "SAVE_CONFIG block untouched"                  test "$(tail -1 "$C/printer.cfg")" = "#*# control = pid"
+inst "$H" 'y\n' --undo
+check "undo brings the ACE files back"               test -f "$C/acepro.cfg" -a -L "$H/klipper/klippy/extras/ace"
+check "undo brings the include line back"            grep -q 'include acepro.cfg' "$C/printer.cfg"
+inst "$H" 'n\n' --uninstall
+check "answering no changes nothing"                 test -f "$C/acepro.cfg"
+
+echo "22. Uninstall (Simple AF): your hooks stay, ACE lines go"
+H="$(new_home t22)"; C="$(cfg "$H")"; mkdir -p "$H/pellcorp"
+printf '[gcode_macro _SAF_START_PRINT_END]\ngcode:\n   M117 start\n\n[gcode_macro mine]\ngcode:\n   G28\n' > "$C/my_saf_hooks.cfg"
+inst "$H" '3\n1\nPA4\nn\ny\nPF1\ny\nPB14\ny\ny\nn\nn\ny\ny\n'
+check "ACE line was added"                           grep -q ZERO_OUT_SERVO "$C/my_saf_hooks.cfg"
+inst "$H" 'y\n' --uninstall
+check "ACE lines gone"                               test -z "$(grep -E 'ZERO_OUT_SERVO|ACE_ENCODER|_ACE_ON_' "$C/my_saf_hooks.cfg")"
+check "your lines kept"                              bash -c 'grep -q "M117 start" "$0" && grep -q "G28" "$0"' "$C/my_saf_hooks.cfg"
+H="$(new_home t22b)"; C="$(cfg "$H")"; mkdir -p "$H/pellcorp"
+inst "$H" '3\n1\nPA4\nn\ny\nPF1\ny\nPB14\ny\ny\nn\nn\ny\ny\n'
+check "new hooks file written"                       test -f "$C/my_saf_hooks.cfg"
+inst "$H" 'y\n' --uninstall
+check "hooks file removed when only ACE lines"       test ! -e "$C/my_saf_hooks.cfg"
+check "its include line removed"                     test -z "$(grep 'my_saf_hooks' "$C/printer.cfg")"
+
+echo "23. Import values from an earlier install"
+H="$(new_home t23)"; C="$(cfg "$H")"
+inst "$H" "$A_KLIPPER"
+python3 -I "$REPO/tools/ace_cfg_tool.py" set "$C/acepro_macros.cfg" "gcode_macro _ACE_VARS" variable_cut_speed 777
+inst "$H" 'y\n' --uninstall
+mkdir -p "$H/acepro-removed-1"; cp "$H"/acepro-backup/*uninstall/files"$C"/acepro_macros.cfg "$H/acepro-removed-1/" 2>/dev/null
+inst "$H" "1\n2\nPA4\nn\nn\ny\nPB14\ny\ny\nn\nn\n1\ny\n"
+check "import list shown"                            grep -q "Values from an earlier" <<<"$OUT"
+check "your value copied"                            grep -q 'variable_cut_speed: *777' "$C/acepro_macros.cfg"
+inst "$H" 'y\n' --uninstall
+H2="$(new_home t23b)"; inst "$H2" "$A_KLIPPER"
+check "no import question on a clean home"           bash -c '! grep -q "Values from an earlier" <<<"$0"' "$OUT"
+
+echo "24. Doctor"
+H="$(new_home t24)"; C="$(cfg "$H")"
+inst "$H" "$A_KLIPPER"
+inst "$H" "" --doctor
+check "healthy install: no problems"                 grep -q "No problems found" <<<"$OUT"
+sed -i '/include acepro.cfg/d' "$C/printer.cfg"
+printf '[gcode_macro STRAY]\ngcode:\n  M117 x\n' >> "$C/printer.cfg"
+cp "$C/printer.cfg" "$ROOT/t24.before"
+inst "$H" 'n\nn\n' --doctor --dry-run
+check "dry run changes nothing"                      cmp -s "$C/printer.cfg" "$ROOT/t24.before"
+inst "$H" 'y\ny\n' --doctor
+check "missing include found and offered"            grep -q "does not include acepro.cfg" <<<"$OUT"
+check "below-SAVE_CONFIG found"                      grep -q "BELOW" <<<"$OUT"
+check "include fixed"                                grep -q 'include acepro.cfg' "$C/printer.cfg"
+check "lines moved above SAVE_CONFIG"                test "$(grep -n '^\[gcode_macro STRAY\]' "$C/printer.cfg" | cut -d: -f1)" -lt "$(grep -n 'SAVE_CONFIG' "$C/printer.cfg" | cut -d: -f1)"
+check "saved block intact"                           test "$(tail -1 "$C/printer.cfg")" = "#*# control = pid"
+inst "$H" "" --doctor
+check "second run is clean"                          grep -q "No problems found" <<<"$OUT"
+inst "$H" 'y\n' --undo
+
 echo
 echo "14. [force_move] already in another file is not added twice"
 H="$(new_home t14)"; C="$(cfg "$H")"

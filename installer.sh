@@ -13,6 +13,8 @@
 # ./installer.sh --check         report problems, change nothing
 # ./installer.sh --repair        restore links and includes (for example after a Simple AF update)
 # ./installer.sh --undo [DIR]    put back the files saved before the last install
+# ./installer.sh --uninstall     remove everything the installer added (saved first, so --undo brings it back)
+# ./installer.sh --doctor        find problems, explain them, and offer a fix for each (asks before changing anything)
 # ./installer.sh --support-bundle  collect logs and config (secrets removed) to share
 # ./installer.sh --dry-run       go through the questions, show what would change, change nothing
 # ./installer.sh --help
@@ -521,6 +523,10 @@ stage_files() {
         cp "$SCRIPT_DIR/config/$f" "$STAGE/$f"
     done
 
+    if [ -n "$IMPORT_FROM" ] && [ "$UPDATING" = 0 ]; then
+        cfg_tool carry "$IMPORT_FROM" "$STAGE/acepro_macros.cfg" >/dev/null || true
+    fi
+
     # Simple AF hooks: update your my_saf_hooks.cfg (or write a new one). The encoder lines stay only
     # if you have the ACE encoder sensor.
     HOOKS_SUMMARY=""; HOOKS_ELSEWHERE=""
@@ -676,14 +682,15 @@ check_virtual_pin_order() {
     print_warning "A config file uses a virtual pin before [virtual_pins] is loaded:"
     echo "$out" | sed 's/^ERROR: */    /'
     why "Klipper reads files top to bottom, so [virtual_pins] has to come first or it stops with: Unknown pin chip name 'virtual_pin'."
-    if [ "$DRY" = 1 ]; then return 0; fi
+    if [ "$DRY" = 1 ]; then return 1; fi
     if ask_yn "Add [virtual_pins] at the top of printer.cfg? (printer.cfg is saved first)" Y; then
         backup_path "$CONFIG_DIR/printer.cfg"
         { echo "[virtual_pins]"; echo; cat "$CONFIG_DIR/printer.cfg"; } > "$CONFIG_DIR/printer.cfg.new" && cat "$CONFIG_DIR/printer.cfg.new" > "$CONFIG_DIR/printer.cfg" && rm -f "$CONFIG_DIR/printer.cfg.new"
         print_success "Added [virtual_pins] at the top of printer.cfg"
-    else
-        warn_later "A file uses a virtual pin before [virtual_pins] loads. Add [virtual_pins] near the top of printer.cfg."
+        return 0
     fi
+    warn_later "A file uses a virtual pin before [virtual_pins] loads. Add [virtual_pins] near the top of printer.cfg."
+    return 1
 }
 
 # Run the validator on a copy of the config with the new files in it. Only problems the
@@ -1055,6 +1062,7 @@ do_install() {
         load_profile "$PROFILE"
         print_success "Profile: $PROFILE_NAME"
         ask_hardware
+        offer_import_old_values
     else
         load_profile "$PROFILE"
         print_success "Profile: $PROFILE_NAME"
@@ -1107,13 +1115,265 @@ do_install() {
     [ "$WANT_KS" = 1 ] && setup_klipperscreen
     [ -f "$(CONF_FILE)" ] && backup_path "$(CONF_FILE)" || echo "NEW $(CONF_FILE)" >> "$BACKUP_DIR/manifest.txt"
     save_answers
-    check_virtual_pin_order
+    check_virtual_pin_order || true
 
     local stale; stale="$(stale_backup_links)"
     [ -n "$stale" ] && warn_later "Old backup links sit in Klipper's extras folder (ace_backup_*). They are harmless; ./installer.sh --repair removes them."
 
     restart_and_selftest
     final_steps
+}
+
+# ============================================================================
+# Import values from an earlier install (fresh install only)
+# ============================================================================
+
+IMPORT_FROM=""
+
+find_old_macros() { # prints candidate acepro_macros.cfg files, newest first
+    {
+        [ -f "$CONFIG_DIR/acepro_macros.cfg" ] && echo "$CONFIG_DIR/acepro_macros.cfg"
+        ls "$CONFIG_DIR"/acepro_macros.cfg.* "$CONFIG_DIR"/acepro_macros.cfg~ 2>/dev/null
+        ls "$BACKUP_ROOT"/*/files"$CONFIG_DIR"/acepro_macros.cfg 2>/dev/null
+        ls "$INSTALL_HOME"/acepro-removed-*/acepro_macros.cfg 2>/dev/null
+    } | while IFS= read -r f; do
+        [ -f "$f" ] && echo "$(stat -c %Y "$f" 2>/dev/null || echo 0) $f"
+    done | sort -rn | awk '!seen[$2]++ {print $2}'
+}
+
+offer_import_old_values() {
+    local fresh="$SCRIPT_DIR/config/acepro_macros.cfg" cands=() f n d i=1 pick
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        d="$(cfg_tool diffvals "$f" "$fresh" 2>/dev/null || true)"
+        [ -n "$d" ] || continue
+        cands+=("$f")
+    done < <(find_old_macros)
+    [ "${#cands[@]}" -gt 0 ] || return 0
+    print_header "Values from an earlier ACE install"
+    echo "I found settings from an earlier install that differ from the defaults:"
+    for f in "${cands[@]}"; do
+        n="$(cfg_tool diffvals "$f" "$fresh" | wc -l)"
+        echo "  $i) $f   ($n value(s), $(date -d "@$(stat -c %Y "$f")" '+%Y-%m-%d %H:%M' 2>/dev/null))"
+        cfg_tool diffvals "$f" "$fresh" | head -6 | sed 's/^/        /'
+        [ "$n" -gt 6 ] && echo "        ... and $((n-6)) more"
+        i=$((i+1))
+    done
+    echo "  0) none, use the defaults"
+    why "your measured positions and cutter settings can be copied into the new files so you do not measure again."
+    pick="$(ask_text "Which one should I copy your values from?" "1")"
+    case "$pick" in ''|*[!0-9]*) pick=0 ;; esac
+    if [ "$pick" -ge 1 ] && [ "$pick" -le "${#cands[@]}" ]; then
+        IMPORT_FROM="${cands[$((pick-1))]}"
+        print_success "I will copy the values from $IMPORT_FROM"
+    else
+        print_info "Using the defaults."
+    fi
+}
+
+# ============================================================================
+# Uninstall
+# ============================================================================
+
+UNINSTALL_FILES=(acepro.cfg acepro_setting.cfg acepro_macros.cfg acepro_printer_macros.cfg acepro_servo.cfg spoolman_logic.cfg cut_calibrate.cfg acepro-install.conf)
+
+remove_include_lines() { # file
+    local pc="$1" tmp
+    [ -f "$pc" ] || return 0
+    grep -qE '^[[:space:]]*\[include[[:space:]]+(\./)?(acepro\.cfg|cut_calibrate\.cfg)\]' "$pc" || return 0
+    backup_path "$pc"
+    tmp="$(mktemp)"
+    grep -vE '^[[:space:]]*\[include[[:space:]]+(\./)?(acepro\.cfg|cut_calibrate\.cfg)\][[:space:]]*(#.*)?$' "$pc" > "$tmp" && cat "$tmp" > "$pc"
+    rm -f "$tmp"
+    print_success "Removed the ACE include line(s) from printer.cfg"
+}
+
+remove_link() { # path label
+    local l="$1"
+    is_symlink "$l" || return 0
+    echo "LINK $l $(readlink "$l")" >> "$BACKUP_DIR/manifest.txt"
+    rm -f "$l" && print_success "Removed link: $2"
+}
+
+do_uninstall() {
+    local f x saved plan=() ks ksconf tpl hooks_plan="" hooks_gone=0 tmp
+    guard_not_printing
+    find_dirs
+    saved="$(kv_get "$(CONF_FILE)" PROFILE || true)"
+    PROFILE="${saved:-$(detect_profile)}"
+    load_profile "$PROFILE"
+    x="$KLIPPER_DIR/klippy/extras"
+    ks="$INSTALL_HOME/KlipperScreen/panels/acepro.py"; ksconf="$CONFIG_DIR/KlipperScreen.conf"
+    print_header "Uninstall ACE Pro"
+    echo "This removes what the installer added:"
+    for f in "${UNINSTALL_FILES[@]}"; do [ -e "$CONFIG_DIR/$f" ] && echo "  FILE   $CONFIG_DIR/$f"; done
+    for f in ace temperature_ace.py virtual_pins.py; do is_symlink "$x/$f" && echo "  LINK   $x/$f"; done
+    is_symlink "$ks" && echo "  LINK   $ks"
+    grep -q 'menu __main acepro\]\|menu __print acepro\]' "$ksconf" 2>/dev/null && echo "  EDIT   KlipperScreen.conf (the ACE Pro menu entries)"
+    include_present && echo "  EDIT   printer.cfg (the [include acepro.cfg] line)"
+    if [ "$SAF_HOOKS" = "yes" ] && [ -f "$CONFIG_DIR/$HOOKS_FILE" ]; then
+        tpl="$(profile_file my_saf_hooks.cfg)"
+        tmp="$(mktemp)"
+        hooks_plan="$(cfg_tool unhooks "$tpl" "$CONFIG_DIR/$HOOKS_FILE" "$tmp" 2>/dev/null || true)"
+        if [ "$hooks_plan" = "EMPTY" ]; then
+            hooks_gone=1; echo "  FILE   $CONFIG_DIR/$HOOKS_FILE (only had the ACE lines)"
+            echo "  EDIT   the [include $HOOKS_FILE] line"
+        elif [ -n "$hooks_plan" ]; then
+            echo "  EDIT   $HOOKS_FILE: the ACE lines come out, yours stay"
+            echo "$hooks_plan" | head -8 | sed 's/^/           /'
+        fi
+        rm -f "$tmp"
+    fi
+    echo
+    print_info "Left alone: your own lines, [force_move] and [virtual_pins] in your files, the Fluidd ACE panel, Python packages."
+    why "everything is saved first. ./installer.sh --undo puts it all back."
+    [ "$DRY" = 1 ] && { print_info "Dry run: nothing removed."; return 0; }
+    ask_yn "Remove the ACE Pro install?" N || { print_info "Cancelled. Nothing changed."; return 0; }
+
+    BACKUP_DIR="$BACKUP_ROOT/$(timestamp)-uninstall"
+    mkdir -p "$BACKUP_DIR" && : > "$BACKUP_DIR/manifest.txt"
+    # hooks first (needs the include line decision)
+    if [ "$SAF_HOOKS" = "yes" ] && [ -f "$CONFIG_DIR/$HOOKS_FILE" ] && [ -n "$hooks_plan" ]; then
+        backup_path "$CONFIG_DIR/$HOOKS_FILE"
+        if [ "$hooks_gone" = 1 ]; then
+            rm -f "$CONFIG_DIR/$HOOKS_FILE"
+            local inc; inc="$(hooks_included_by)"
+            if [ -n "$inc" ]; then
+                backup_path "$inc"
+                sed -i -E "/^[[:space:]]*\[include[[:space:]]+(\.\/)?${HOOKS_FILE//./\.}\]/d" "$inc"
+            fi
+            print_success "Removed $HOOKS_FILE and its include line"
+        else
+            tmp="$(mktemp)"; cfg_tool unhooks "$tpl" "$CONFIG_DIR/$HOOKS_FILE" "$tmp" >/dev/null && cat "$tmp" > "$CONFIG_DIR/$HOOKS_FILE"; rm -f "$tmp"
+            print_success "Took the ACE lines out of $HOOKS_FILE"
+        fi
+    fi
+    remove_include_lines "$CONFIG_DIR/printer.cfg"
+    for f in "${UNINSTALL_FILES[@]}"; do
+        if [ -e "$CONFIG_DIR/$f" ]; then backup_path "$CONFIG_DIR/$f"; rm -f "$CONFIG_DIR/$f"; print_success "Removed $f"; fi
+    done
+    for f in ace temperature_ace.py virtual_pins.py; do remove_link "$x/$f" "$f"; done
+    remove_link "$ks" "KlipperScreen ACE panel"
+    if grep -q 'menu __main acepro\]\|menu __print acepro\]' "$ksconf" 2>/dev/null; then
+        backup_path "$ksconf"
+        cfg_tool rmsection "$ksconf" "menu __main acepro" || true
+        cfg_tool rmsection "$ksconf" "menu __print acepro" || true
+        print_success "Removed the ACE Pro entries from KlipperScreen.conf"
+    fi
+    echo
+    print_success "ACE Pro is uninstalled. Saved in: $BACKUP_DIR"
+    print_info "Restart Klipper: sudo systemctl restart $KLIPPER_SERVICE"
+    print_info "To bring it all back: ./installer.sh --undo"
+}
+
+# ============================================================================
+# Doctor: find problems, explain them, offer a fix (asks before every change)
+# ============================================================================
+
+doctor_fix_below_save() { # moves lines found below the SAVE_CONFIG marker to just above it
+    local pc="$CONFIG_DIR/printer.cfg" tmp
+    backup_path "$pc"
+    tmp="$(mktemp)"
+    awk '
+        /^#\*# <-+ SAVE_CONFIG -+>/ && !m { m=1; marker=$0; next }
+        m && /^#\*#/ { blk[++nb]=$0; next }
+        m && /^[[:space:]]*$/ { blk[++nb]=$0; next }
+        m { extra[++ne]=$0; next }
+        { pre[++np]=$0 }
+        END {
+            for (i=1;i<=np;i++) print pre[i]
+            if (!m) exit
+            for (i=1;i<=ne;i++) print extra[i]
+            print marker
+            for (i=1;i<=nb;i++) print blk[i]
+        }' "$pc" > "$tmp" && cat "$tmp" > "$pc"
+    rm -f "$tmp"
+}
+
+do_doctor() {
+    local saved vout n=0 fixed=0 py f x stale others started=0 line
+    find_dirs
+    saved="$(kv_get "$(CONF_FILE)" PROFILE || true)"
+    PROFILE="${saved:-$(detect_profile)}"
+    load_profile "$PROFILE"
+    py="$(klippy_python)"
+    BACKUP_DIR="$BACKUP_ROOT/$(timestamp)-doctor"
+    echo -e "${BLUE}ACE Pro doctor${NC}   profile: $PROFILE_NAME   installer v$VERSION"
+    echo "I look for problems, explain each one, and offer a fix. Nothing changes unless you say yes."
+    [ "$DRY" = 1 ] && print_info "Dry run: I will only report."
+    doctor_begin() { [ "$started" = 1 ] || { mkdir -p "$BACKUP_DIR" && : > "$BACKUP_DIR/manifest.txt"; started=1; }; }
+
+    # 1. includes and files
+    if [ -f "$CONFIG_DIR/acepro.cfg" ] && ! include_present; then
+        n=$((n+1)); print_error "printer.cfg does not include acepro.cfg"
+        why "without the include line Klipper never loads the ACE files, so the ACE macros do not exist."
+        if [ "$DRY" != 1 ] && ask_yn "Add [include acepro.cfg] at the top of printer.cfg? (saved first)" Y; then
+            doctor_begin; ensure_include_in_printer_cfg; fixed=$((fixed+1))
+        fi
+    fi
+    if [ "$PROFILE" = "saf" ] && [ -f "$CONFIG_DIR/$HOOKS_FILE" ] && [ -z "$(hooks_included_by)" ]; then
+        n=$((n+1)); print_warning "$HOOKS_FILE exists but no file includes it"
+        why "Simple AF only runs the hooks in files that printer.cfg includes."
+        if [ "$DRY" != 1 ] && ask_yn "Add [include $HOOKS_FILE] to printer.cfg? (saved first)" Y; then
+            doctor_begin; ensure_include_line "[include $HOOKS_FILE]"; fixed=$((fixed+1))
+        fi
+    fi
+
+    # 2. driver links
+    x="$KLIPPER_DIR/klippy/extras"; local badlink=0
+    for f in ace temperature_ace.py virtual_pins.py; do [ -e "$x/$f" ] || badlink=1; done
+    stale="$(stale_backup_links)"
+    if [ "$badlink" = 1 ] || [ -n "$stale" ]; then
+        n=$((n+1)); print_warning "The driver links in Klipper's extras folder are missing, broken or have old leftovers"
+        why "Klipper finds the ACE driver through links in klippy/extras. A Klipper update can remove them."
+        if [ "$DRY" != 1 ] && ask_yn "Fix the links now? (same as --repair)" Y; then
+            doctor_begin; BACKUP_DIR="$BACKUP_DIR"; link_driver
+            for f in $stale; do echo "LINK $f $(readlink "$f")" >> "$BACKUP_DIR/manifest.txt"; rm -f "$f"; done
+            fixed=$((fixed+1))
+        fi
+    fi
+
+    # 3. text below SAVE_CONFIG
+    vout="$("$py" "$VALIDATOR" "$CONFIG_DIR/printer.cfg" --profile "$PROFILE" 2>&1 || true)"
+    if grep -q 'BELOW the SAVE_CONFIG' <<<"$vout"; then
+        n=$((n+1)); print_error "There are lines BELOW Klipper's SAVE_CONFIG block in printer.cfg"
+        grep 'BELOW the SAVE_CONFIG' <<<"$vout" | sed 's/^ERROR: */    /'
+        why "Klipper ignores the saved values (heater PID, offsets) when other text sits below the block; Kalico then stops with \"pid_profile control has to be specified\"."
+        if [ "$DRY" != 1 ] && ask_yn "Move those lines to just above the SAVE_CONFIG line? (saved first)" Y; then
+            doctor_begin; doctor_fix_below_save; print_success "Moved them above the SAVE_CONFIG block"; fixed=$((fixed+1))
+        fi
+    fi
+
+    # 4. virtual pins
+    if grep -q 'before \[virtual_pins\]' <<<"$vout"; then
+        n=$((n+1))
+        [ "$DRY" = 1 ] || doctor_begin
+        check_virtual_pin_order && [ "$DRY" != 1 ] && fixed=$((fixed+1))
+    fi
+
+    # 5. macros defined in several files
+    local dup; dup="$(grep '^note: .*is defined in several files' <<<"$vout" | sed 's/^note: *//' | grep -i 'ace\|pause\|resume\|load_filament\|unload_filament\|_SAF_' || true)"
+    if [ -n "$dup" ]; then
+        n=$((n+1)); print_warning "Some macros are defined in more than one file:"
+        echo "$dup" | sed 's/^/    /'
+        why "Klipper merges them and the file loaded LAST wins. That is normal for PAUSE/RESUME on Simple AF (client.cfg wins). For anything else, check that the winning copy is the one you want."
+        print_info "I do not change these on my own: tell me which one should win and I will help."
+    fi
+
+    # 6. everything else the config check says
+    others="$(grep -E '^ERROR:' <<<"$vout" | grep -vc 'BELOW the SAVE_CONFIG\|before \[virtual_pins\]' || true)"
+    if [ "${others:-0}" -gt 0 ]; then
+        grep -E '^ERROR:' <<<"$vout" | grep -v 'BELOW the SAVE_CONFIG\|before \[virtual_pins\]' | sed 's/^ERROR: */  /'
+        n=$((n+others)); print_info "These errors come from the config check; they need a manual fix (Fluidd config editor)."
+    fi
+    grep -E '^warning:' <<<"$vout" | sed 's/^warning: */  note: /' || true
+
+    echo
+    if [ "$n" = 0 ]; then print_success "No problems found."; else
+        print_info "$n problem(s) found, $fixed fixed."
+        [ "$started" = 1 ] && print_info "Changes were saved first in $BACKUP_DIR (./installer.sh --undo restores them)."
+        [ "$fixed" -gt 0 ] && print_info "Restart Klipper: sudo systemctl restart $KLIPPER_SERVICE"
+    fi
 }
 
 # ============================================================================
@@ -1243,6 +1503,8 @@ parse_args() {
             --check) MODE=check ;;
             --repair|--relink) MODE=repair ;;
             --undo) MODE=undo; if [ "${2:-}" ] && [ "${2:0:2}" != "--" ]; then UNDO_ARG="$2"; shift; fi ;;
+            --uninstall) MODE=uninstall ;;
+            --doctor) MODE=doctor ;;
             --support-bundle) MODE=bundle ;;
             --dry-run) DRY=1 ;;
             --klipper-dir) KLIPPER_DIR="${2:-}"; shift ;;
@@ -1263,6 +1525,8 @@ main() {
         check) do_check ;;
         repair) do_repair ;;
         undo) do_undo "$UNDO_ARG" ;;
+        uninstall) do_uninstall ;;
+        doctor) do_doctor ;;
         bundle) do_support_bundle ;;
     esac
 }

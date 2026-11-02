@@ -240,6 +240,8 @@ The installer asks a few plain questions, shows exactly what it will change, and
 | `./installer.sh --check` | Look for problems. Changes nothing. |
 | `./installer.sh --repair` | Restore the driver links and the include line (use it after a Simple AF or Fluidd update). |
 | `./installer.sh --undo` | Put back the files saved before the last install. |
+| `./installer.sh --uninstall` | Remove everything the installer added (saved first, so `--undo` brings it back). |
+| `./installer.sh --doctor` | Find problems, explain each one, and offer a fix. Asks before it changes anything. |
 | `./installer.sh --dry-run` | Go through the questions and show what would change. Changes nothing. |
 | `./installer.sh --support-bundle` | Collect config (passwords and tokens removed) and logs to share when something fails. |
 
@@ -745,6 +747,26 @@ Every install and update first saves what it will change in `~/acepro-backup/<da
 ```
 
 It restores changed files, removes files the install added, and puts links back as they were.
+
+### Uninstall
+
+```bash
+./installer.sh --uninstall
+```
+
+Shows what it will remove, asks, saves everything first, then removes: the ACE config files, the driver links, the KlipperScreen link and menu entries, the `[include acepro.cfg]` line, and the ACE lines it added to `my_saf_hooks.cfg` (your own lines stay; a hooks file that held only ACE lines is deleted with its include). It leaves alone `[force_move]`, `[virtual_pins]`, the Fluidd ACE panel and Python packages. `./installer.sh --undo` brings it all back.
+
+### Doctor
+
+```bash
+./installer.sh --doctor            # add --dry-run to only look
+```
+
+Checks the includes, the driver links, lines below the SAVE_CONFIG block, virtual-pin order, macros defined in several files, and the config check. For each problem it explains why it matters and offers a fix; it changes nothing unless you say yes, and saves first. Macros defined in several files are only explained: the file loaded last wins.
+
+### Values from an earlier install
+
+On a fresh install the installer looks for earlier ACE settings (the current config, installer backups, `~/acepro-removed-*` folders), shows what differs from the defaults, and asks which one to copy your values (positions, cutter speeds) from, or none.
 
 ### What changed in the latest sync
 

@@ -22,4 +22,7 @@
 - **Virtual-pin order warning.** If a file uses `virtual_pin:` before `[virtual_pins]` is loaded (Klipper: "Unknown pin chip name 'virtual_pin'"), the installer and the config check say so; the installer offers to add `[virtual_pins]` at the top of `printer.cfg` (saved first, only on yes).
 - **ACE USB check.** Warns if no ACE shows up on USB, then carries on.
 - **More folder layouts:** `printer_data` in another place, several Klipper instances (you pick one; service `klipper-N`), and Creality K1 native `/usr/data` (experimental, no systemd or sudo). Also checks sudo and the Klipper service name.
+- **`--uninstall`** removes what the installer added (ACE files, driver links, KlipperScreen link and menu, include line, the ACE lines in `my_saf_hooks.cfg`). Your own lines stay. Saved first; `--undo` brings it back.
+- **`--doctor`** finds problems (missing include, broken links, lines below SAVE_CONFIG, virtual-pin order, duplicate macros), explains them and offers a fix with a backup. Acts only on yes.
+- **Import old values:** a fresh install searches earlier installs and backups, shows what differs, and asks which one to copy your values from.
 - **Tests:** `bash tests/installer/run_tests.sh` runs the installer against fake folders.

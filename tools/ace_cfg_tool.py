@@ -8,6 +8,9 @@
   ace_cfg_tool.py servo    OLD                         print the [servo servo_wipe] block found in OLD
   ace_cfg_tool.py hooks    TEMPLATE TARGET OUT ENCODER [SKIP [SERVO]]  put the ACE lines at the TOP of each Simple AF hook macro
                                                        (TARGET = your file or '-'; ENCODER 1|0; SKIP = macros defined elsewhere)
+  ace_cfg_tool.py unhooks  TEMPLATE TARGET OUT         take the ACE lines out of your hooks file (prints EMPTY if nothing else is left)
+  ace_cfg_tool.py rmsection FILE SECTION               delete a section (header up to the next blank line or section)
+  ace_cfg_tool.py diffvals OLD NEW                     list the values CARRY would copy: "section: key: old -> new"
   ace_cfg_tool.py hooknames TEMPLATE                   list the hook macros of the template
   ace_cfg_tool.py hookcmds TEMPLATE NAME               list the ACE commands the template puts in one hook
 
@@ -328,6 +331,99 @@ def cmd_hooks(template, target, out, encoder, skip="", servo="1"):
     return 0
 
 
+ACE_HOOK_CMDS = ("ZERO_OUT_SERVO", "SFS_ENABLE_ACE_ENCODER", "SFS_DISABLE_ACE_ENCODER", "_ACE_ON_PAUSE", "_ACE_ON_RESUME")
+
+
+def _code_text(line):
+    return re.sub(r"\s+[#;].*$", "", re.sub(r"\s*#@[A-Z,]+\s*$", "", line)).strip()
+
+
+def removed_here(removed, name):
+    return any(r.startswith(name + ": ") for r in removed)
+
+
+def cmd_unhooks(template, target, out):
+    """Remove the ACE lines. A hook macro that is then empty is dropped. If only lines that the
+    template itself carries are left (no lines of yours), print EMPTY: the file can go."""
+    header, macros = parse_hook_template(read(template))
+    names = set(n for n, _ in macros)
+    template_text = set()
+    for _, items in macros:
+        for it in items:
+            for l in it["lines"]:
+                template_text.add(_code_text(l))
+    lines = read(target)
+    res, i, removed, user_lines, other = [], 0, [], 0, 0
+    while i < len(lines):
+        h = HEADER.match(lines[i]) if lines[i][:1] == "[" else None
+        m = re.match(r"gcode_macro\s+(\S+)$", h.group(1).strip()) if h else None
+        if not (m and m.group(1) in names):
+            if h:
+                other += 1
+            res.append(lines[i])
+            i += 1
+            continue
+        j = i + 1
+        while j < len(lines) and not (lines[j][:1] == "[" and HEADER.match(lines[j])):
+            j += 1
+        block = lines[i:j]
+        kept = []
+        for l in block[1:]:
+            if _first_word(l) in ACE_HOOK_CMDS:
+                removed.append("%s: %s" % (m.group(1), _first_word(l)))
+            else:
+                kept.append(l)
+        code = [l for l in kept if l.strip() and l.strip()[0] not in "#;" and not re.match(r"^gcode\s*:", l)]
+        mine = sum(1 for l in code if _code_text(l) not in template_text)
+        if not code:
+            removed.append("%s: (empty, removed)" % m.group(1))
+        elif mine == 0 and removed_here(removed, m.group(1)):
+            removed.append("%s: (only lines from the ACE template were left, removed)" % m.group(1))
+        else:
+            res.extend([block[0]] + kept)
+            user_lines += mine
+        i = j
+    if user_lines == 0 and other == 0 and not any(not l.strip() or l.strip()[0] in "#;" or True for l in []):
+        print("EMPTY")
+        return 0
+    write(out, res)
+    for r in removed:
+        print("REMOVED " + r)
+    return 0
+
+
+def cmd_rmsection(f, section):
+    lines = read(f)
+    for i, line in enumerate(lines):
+        h = HEADER.match(line) if line[:1] == "[" else None
+        if h and h.group(1).strip() == section:
+            end = i + 1
+            while end < len(lines) and lines[end].strip() != "" and not (lines[end][:1] == "[" and HEADER.match(lines[end])):
+                end += 1
+            while end < len(lines) and lines[end].strip() == "":
+                end += 1
+            del lines[i:end]
+            write(f, lines)
+            return 0
+    return 1
+
+
+def cmd_diffvals(old, new):
+    o, n = read(old), read(new)
+    old_map = {}
+    for name, opts in sections(o):
+        old_map.setdefault(name, {}).update({k: o[i] for k, i in opts.items()})
+    for name, opts in sections(n):
+        for key, i in opts.items():
+            line = old_map.get(name, {}).get(key)
+            if line is not None and line != n[i]:
+                ov = OPTION.match(line)
+                nv = OPTION.match(n[i])
+                print("%s: %s: %s -> %s" % (name.replace("gcode_macro ", ""), key,
+                      ov.group(3) if ov else line.strip(), nv.group(3) if nv else n[i].strip()))
+    return 0
+
+
 def cmd_hooknames(template):
     for name, items in parse_hook_template(read(template))[1]:
         print(name)
@@ -359,6 +455,12 @@ def main(argv):
             return cmd_servo(*a)
         if c == "hooks" and len(a) in (4, 5, 6):
             return cmd_hooks(*a)
+        if c == "unhooks" and len(a) == 3:
+            return cmd_unhooks(*a)
+        if c == "rmsection" and len(a) == 2:
+            return cmd_rmsection(*a)
+        if c == "diffvals" and len(a) == 2:
+            return cmd_diffvals(*a)
         if c == "hooknames" and len(a) == 1:
             return cmd_hooknames(*a)
         if c == "hookcmds" and len(a) == 2:
