@@ -856,7 +856,7 @@ If your ACE and MCUs disappear after an OS update, check `dmesg | grep -i xhci` 
 
 For a K1 Max with the factory **CFS purge chute** (no servo bucket) there is a separate, optional set of files in [`variants/cfs-chute/`](variants/cfs-chute/). It is not installed or changed by `installer.sh`, and nothing in `config/` depends on it.
 
-> **⚠️ Untested, use at your own risk.** It has **not been tested on any K1 series printer**: the author does not own the CFS purchase, its extruder or the cutter block. It has not been run through the installer either. The author and contributors are **not responsible for any damage** to your printer or anything else, or for any injury or loss, caused by these files; there is no warranty.
+> **⚠️ Untested, use at your own risk.** It has **not been tested on any K1 series printer**: the author does not own the CFS purge chute, its extruder or the cutter block. It has not been run through the installer either. The author and contributors are **not responsible for any damage** to your printer or anything else, or for any injury or loss, caused by these files; there is no warranty.
 >
 > **Caution:** check **your own printer's specs** (axis limits, where the chute, flap and cutter block really are, sensor pins) before running anything, and **test in small steps**: slowly, nozzle cold, no filament, hand on the power switch. A wrong position can crash the toolhead.
 

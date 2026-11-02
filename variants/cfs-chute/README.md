@@ -4,7 +4,7 @@
 >
 > This is a separate set of ACE Pro files for a **K1 Max with the factory CFS purge chute** instead of a servo poop bucket.
 >
-> - **It has NOT been tested on any K1 series printer** (K1, K1C, K1 Max or K1 SE). The author does not own the CFS purchase, its extruder or the cutter block, so none of this could be tried on that hardware.
+> - **It has NOT been tested on any K1 series printer** (K1, K1C, K1 Max or K1 SE). The author does not own the CFS purge chute, its extruder or the cutter block, so none of this could be tried on that hardware.
 > - The positions and settings come from the author's own configuration and from the reference project [swilsonnc/ACEPROK1Max](https://github.com/swilsonnc/ACEPROK1Max). They have **not** been verified on a real CFS chute, extruder or cutter block.
 > - It has not been run through this repository's installer either.
 >
