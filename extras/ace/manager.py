@@ -1583,7 +1583,6 @@ class AceManager:
             if not self.smart_unload(tool, keep_heater=True):
                 raise Exception(f"Failed to unload parked T{tool}")
 
-    @toolchange_in_progress_guard
     def set_phase(self, phase, steps=None, drop=None):
         """Record the current tool-change step for the panel.
         steps: replace the step list; drop: remove one step from it."""
@@ -1593,6 +1592,7 @@ class AceManager:
             self.toolchange_steps.remove(drop)
         self.toolchange_phase = phase
 
+    @toolchange_in_progress_guard
     def smart_unload(self, tool_index=-1, prepare_toolhead=True, keep_heater=False,
                      cycle_on_blocked=False):
         """_smart_unload, and the unloaded filament is no longer parked."""

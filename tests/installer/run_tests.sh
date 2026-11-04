@@ -418,6 +418,7 @@ check "post-update.sh runs the auto update"          grep -q -- '--update --auto
 check "new entries get install_script"               grep -q '^install_script: tools/post-update.sh' "$REPO/installer.sh"
 check "ACE_SET_PHASE command registered"             grep -q '"ACE_SET_PHASE", cmd_ACE_SET_PHASE' "$REPO/extras/ace/commands.py"
 check "macros report the steps"                      bash -c 'for p in heat cut purge wipe; do grep -q "ACE_SET_PHASE PHASE=$p" "$0/config/acepro_macros.cfg" || exit 1; done' "$REPO"
+check "set_phase is not wrapped by the toolchange guard" bash -c '! grep -B1 "def set_phase" "$0/extras/ace/manager.py" | grep -q toolchange_in_progress_guard && grep -B1 "def smart_unload" "$0/extras/ace/manager.py" | grep -q toolchange_in_progress_guard' "$REPO"
 check "driver publishes the phase and steps"         bash -c 'grep -q "toolchange_phase" "$0/extras/ace/manager.py" && grep -q "toolchange_steps" "$0/extras/ace/manager.py"' "$REPO"
 check "unload waits before the ACE pulls"            bash -c 'grep -q "_start_queued_toolhead_moves()" "$0/extras/ace/manager.py" && grep -q "monotonic() + 0.25" "$0/extras/ace/manager.py"' "$REPO"
 check "Fluidd Unload buttons run UNLOAD_TOOL"        bash -c '! grep -qE "aceSendGcode\(.TR.\)|run\(.TR., true\)" "$0/fluidd/fluidd-acepro.patch"' "$REPO"
