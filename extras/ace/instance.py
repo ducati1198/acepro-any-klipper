@@ -1362,6 +1362,9 @@ class AceInstance:
         )
 
         self.gcode.run_script_from_command("G92 E0")
+        # The push from the toolhead sensor to the nozzle is the start of the purge.
+        if hasattr(self.manager, "set_phase"):
+            self.manager.set_phase("purge")
         self.gcode.respond_info(
             f"ACE[{self.instance_num}]: Feeding from sensor to nozzle..."
         )
