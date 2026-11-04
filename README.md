@@ -380,7 +380,9 @@ Run `ACE_SELFTEST` any time for a read-only health check: the driver, each unit'
 
 - **Cutter:** `cut_block_*`, `cut_engage_*`, `cut_full_*` (use the calibration in section 9).
 - **Poop bucket:** `poop_x`, `poop_y`, plus the shake and oscillation values.
-- **Wipe:** `wipe_start_x/y`, `wipe_length`, `wipe_pattern` (`STRAIGHT` or `ZIGZAG`).
+- **Wipe:** `wipe_start_x/y`, `wipe_length`, `wipe_pattern` (`STRAIGHT` or `ZIGZAG`), `wipe_zigzag_amp` (width of the ZIGZAG wipe).
+- **Temperatures:** `load_temp`, `unload_min_temp`, `unload_heat_temp`, `startup_cool_temp`, `purge_fallback_temp`.
+- **Z hop before a tool change:** `min_zhop`, `zhop_lift` and `allow_unhomed_zhop` in `[gcode_macro _ACE_PRE_TOOLCHANGE]` (with Z not homed the hop is skipped unless `allow_unhomed_zhop` is 1).
 - **Servo:** pin in `acepro_servo.cfg`, and `servo_deploy_angle`, `servo_retract_angle`, `servo_min_z` in `_ACE_VARS`.
 
 What you have is switched on or off in `_ACE_VARS`: `servo_enable`, `cutter_enable`, `poop_enable`. Without a poop bucket the purged filament lands where the nozzle is.

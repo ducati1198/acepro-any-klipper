@@ -386,5 +386,11 @@ check "resume retracts after the wipe (RESUME)"      grep -q "G1 E-{post_wipe_re
 check "no pre_wipe_retract left"                     bash -c '! grep -rq pre_wipe_retract "$0/config" "$0/variants"' "$REPO"
 check "new resume settings exist"                    bash -c 'grep -q "variable_resume_pre_purge_retract" "$0/config/acepro_macros.cfg" && grep -q "variable_resume_extra_prime: 0.0" "$0/config/acepro_macros.cfg"' "$REPO"
 
+echo "18. Review fixes"
+check "Z hop uses min_zhop and zhop_lift"            bash -c 'grep -q "curz < min_zhop" "$0/config/acepro_macros.cfg" && grep -q "curz + zhop_lift" "$0/config/acepro_macros.cfg"' "$REPO"
+check "blade moves check positions"                  bash -c 'for m in TO_BLADE TO_FRONT_OF_THROW_BLADE TO_FRONT_OF_THROW_BLADE_2 TO_FRONT_OF_THROW_BLADE_SLOW; do awk -v m="$m" "\$0==\"[gcode_macro \" m \"]\"{f=1;next} f&&/^gcode:/{g=1;next} g&&NF{print \$1; exit}" "$0/config/acepro.cfg" | grep -qx _ACE_REQUIRE_POSITIONS || exit 1; done' "$REPO"
+check "no fixed 2.5 left in the zigzag wipe"         bash -c '! sed -n "/gcode_macro _WIPE_ZIGZAG/,/Servo Shake Macro/p" "$0/config/acepro_macros.cfg" | grep -q "[+-] 2.5}"' "$REPO"
+check "no commented-out G9111 macro left"            bash -c '! grep -q "^# *\[gcode_macro G9111\]" "$0/config/acepro.cfg"' "$REPO"
+
 echo "Passed: $PASS   Failed: $FAIL"
 [ "$FAIL" -eq 0 ]
