@@ -1660,7 +1660,7 @@ index 0000000..b62297a
 +    )
 +
 +    if (result) {
-+      this.aceSendGcode('TR')
++      this.aceSendGcode('UNLOAD_TOOL')
 +    }
 +  }
 +}
@@ -3112,7 +3112,7 @@ index 0000000..3145fdc
 +          small
 +          color="warning"
 +          :disabled="!canMove"
-+          @click="run('TR', true)"
++          @click="run('UNLOAD_TOOL', true)"
 +        >
 +          Unload T{{ tool }}
 +        </app-btn>
@@ -3543,7 +3543,7 @@ index 0000000..a47c56a
 +            color="warning"
 +            class="mr-1"
 +            :disabled="!aceCanMove"
-+            @click="aceSendGcode('TR')"
++            @click="aceSendGcode('UNLOAD_TOOL')"
 +          >
 +            Unload
 +          </app-btn>
@@ -3816,7 +3816,7 @@ index 0000000..7d63a67
 +                color="warning"
 +                text
 +                :disabled="!aceCanMove"
-+                @click="aceSendGcode('TR')"
++                @click="aceSendGcode('UNLOAD_TOOL')"
 +              >
 +                Unload
 +              </app-btn>

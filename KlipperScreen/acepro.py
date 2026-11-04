@@ -1673,7 +1673,7 @@ class Panel(ScreenPanel):
                 if response_id == _RESP_LOAD:
                     self._load_tool(global_tool)
                 elif response_id == _RESP_UNLOAD:
-                    self._send_gcode("TR")
+                    self._send_gcode("UNLOAD_TOOL")
                     self._screen.show_popup_message("Unloading...", 1)
 
             self._gtk.Dialog(
@@ -1694,7 +1694,7 @@ class Panel(ScreenPanel):
         def unload_response(dialog, response_id):
             self._gtk.remove_dialog(dialog)
             if response_id == Gtk.ResponseType.OK:
-                self._send_gcode("TR")
+                self._send_gcode("UNLOAD_TOOL")
                 self._screen.show_popup_message("Unloading...", 1)
             elif response_id == RESP_FORCE_UNLOAD:
                 self._force_unload(global_tool)
