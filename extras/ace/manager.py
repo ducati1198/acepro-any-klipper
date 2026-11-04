@@ -137,6 +137,8 @@ def toolchange_in_progress_guard(method):
             self._toolchange_depth -= 1
             if self._toolchange_depth == 0:
                 self.toolchange_in_progress = False
+                self.toolchange_phase = ""
+                self.toolchange_steps = []
     return wrapper
 
 
@@ -335,6 +337,8 @@ class AceManager:
         )
 
         self.toolchange_in_progress = False
+        self.toolchange_phase = ""
+        self.toolchange_steps = []
         if self.ace_config.get("feed_assist_off_when_idle", True):
             IdleFeedAssist(self.printer, self)
         # True from klippy:ready until startup validation has confirmed or
@@ -1580,9 +1584,20 @@ class AceManager:
                 raise Exception(f"Failed to unload parked T{tool}")
 
     @toolchange_in_progress_guard
+    def set_phase(self, phase, steps=None, drop=None):
+        """Record the current tool-change step for the panel.
+        steps: replace the step list; drop: remove one step from it."""
+        if steps is not None:
+            self.toolchange_steps = list(steps)
+        if drop and drop in self.toolchange_steps:
+            self.toolchange_steps.remove(drop)
+        self.toolchange_phase = phase
+
     def smart_unload(self, tool_index=-1, prepare_toolhead=True, keep_heater=False,
                      cycle_on_blocked=False):
         """_smart_unload, and the unloaded filament is no longer parked."""
+        if not self.toolchange_steps:
+            self.set_phase("heat", ["heat", "cut", "retract"])
         if tool_index < 0 and self.state.get("ace_current_index", -1) < 0:
             tool_index = self._identify_unrecorded_tool()
         self._heater_target_before = self._extruder_target()
@@ -1774,6 +1789,7 @@ class AceManager:
                 # Let the cut / move-to-chute finish before anything pulls.
                 self._wait_toolhead_move_finished()
 
+                self.set_phase("retract")
                 self.gcode.respond_info(
                     f"ACE: Retracting T{tool_index} "
                     f"({retract_length:.3f}mm at {retract_speed:.3f}mm/s)"
@@ -3441,6 +3457,10 @@ class AceManager:
                     f"ACE: Tool {target_tool} path cleared, proceeding with normal load."
                 )
 
+        if current_tool != -1 and not is_endless_spool:
+            self.set_phase("heat", ["heat", "cut", "retract", "load", "purge", "wipe"])
+        else:
+            self.set_phase("heat", ["heat", "load", "purge", "wipe"])
         # ===== PRE-TOOLCHANGE (Macro handles heating) =====
         self.gcode.run_script_from_command(
             f"_ACE_PRE_TOOLCHANGE FROM={current_tool} TO={target_tool} TARGET_TEMP={target_temp}"
@@ -3549,6 +3569,7 @@ class AceManager:
                 FEEDER_EXTRUDER if target_ace.instance_num in self.transfers else FEEDER_ACE,
             )
 
+            self.set_phase("load")
             # Capture the amount purged during loading
             purged_amount = target_ace._feed_filament_into_toolhead(target_tool, check_pre_condition=False)
 
@@ -3718,6 +3739,8 @@ class AceManager:
                 "lanes": self._moonraker_lane_sync.lane_entries(),
                 "lane_sync_enabled": bool(self._moonraker_lane_sync.enabled),
                 "toolchange_in_progress": bool(self.toolchange_in_progress),
+                "toolchange_phase": self.toolchange_phase,
+                "toolchange_steps": list(self.toolchange_steps),
                 "box_tag_tools": self._box_tag_tools(),
                 **tool_numbering,
             }

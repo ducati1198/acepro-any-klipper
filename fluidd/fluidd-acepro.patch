@@ -2120,7 +2120,7 @@ new file mode 100644
 index 0000000..6d08204
 --- /dev/null
 +++ b/src/components/widgets/acepro/AceProProgress.vue
-@@ -0,0 +1,142 @@
+@@ -0,0 +1,197 @@
 +<template>
 +  <v-alert
 +    v-if="active"
@@ -2173,8 +2173,16 @@ index 0000000..6d08204
 +        </div>
 +      </div>
 +    </div>
-+    <div class="text-body-2 mt-1">
-+      Estimated from the loaded tool and the filament position.
++    <div class="mt-2">
++      <div
++        v-for="(step, index) in steps"
++        :key="`ace-check:${step.id}`"
++        class="d-flex align-center text-body-2 ace-check"
++        :class="{ 'ace-check--done': index < stageIndex, 'ace-check--now': index === stageIndex }"
++      >
++        <span class="ace-check__dot" />
++        {{ step.long }}
++      </div>
 +    </div>
 +  </v-alert>
 +</template>
@@ -2188,12 +2196,24 @@ index 0000000..6d08204
 +export default class AceProProgress extends Mixins(AceProMixin) {
 +  readonly icons = { swap: mdiSwapHorizontal }
 +
-+  readonly steps = [
-+    { id: 'retract', label: 'Retract & cut' },
-+    { id: 'unload', label: 'Unload' },
-+    { id: 'load', label: 'Load' },
-+    { id: 'purge', label: 'Purge & wipe' }
-+  ]
++  // The driver reports the steps of the running job (aceManager.toolchange_steps)
++  // and the one that is running (aceManager.toolchange_phase).
++  get steps (): { id: string, label: string, long: string }[] {
++    const reported = this.aceManager?.toolchange_steps
++    const ids: string[] = Array.isArray(reported) && reported.length ? reported : ['heat', 'cut', 'retract']
++    const from = this.aceCurrentTool >= 0 ? `T${this.aceCurrentTool}` : 'filament'
++    const to = this.target >= 0 ? `T${this.target}` : 'filament'
++    const names: Record<string, string[]> = {
++      heat: ['Heat', 'Heating the nozzle'],
++      cut: ['Cut', 'Cutting the filament'],
++      retract: ['Retract', `Retracting ${from} into the ACE`],
++      load: ['Load', `Loading ${to}`],
++      purge: ['Purge', 'Purging the new filament'],
++      wipe: ['Wipe', 'Wiping the nozzle']
++    }
++
++    return ids.map(id => ({ id, label: (names[id] ?? [id, id])[0], long: (names[id] ?? [id, id])[1] }))
++  }
 +
 +  get active (): boolean {
 +    return this.aceToolchangeActive
@@ -2214,15 +2234,15 @@ index 0000000..6d08204
 +  }
 +
 +  get stageIndex (): number {
-+    const position = this.aceFilamentPosition
++    const index = this.steps.findIndex(step => step.id === this.aceManager?.toolchange_phase)
 +
-+    if (this.aceCurrentTool >= 0 && this.aceCurrentTool === this.target) return 3
-+    if (this.aceCurrentTool >= 0) return position === 'nozzle' ? 0 : 1
-+    return position === 'nozzle' ? 3 : 2
++    return index < 0 ? 0 : index
 +  }
 +
 +  get stageLabel (): string {
-+    return this.steps[this.stageIndex].label + '…'
++    const step = this.steps[this.stageIndex]
++
++    return step ? step.long + '…' : ''
 +  }
 +}
 +</script>
@@ -2255,6 +2275,41 @@ index 0000000..6d08204
 +
 +.ace-step--now .ace-step__bar {
 +  background: var(--v-primary-base);
++  animation: ace-step-pulse 1.2s infinite ease-in-out;
++}
++
++.ace-check {
++  opacity: 0.55;
++  margin-bottom: 3px;
++}
++
++.ace-check__dot {
++  display: inline-block;
++  flex: none;
++  width: 14px;
++  height: 14px;
++  box-sizing: border-box;
++  margin-right: 8px;
++  border-radius: 50%;
++  border: 2px solid rgba(128, 128, 128, 0.6);
++}
++
++.ace-check--done,
++.ace-check--now {
++  opacity: 1;
++}
++
++.ace-check--done .ace-check__dot {
++  background: var(--v-primary-base);
++  border-color: var(--v-primary-base);
++}
++
++.ace-check--now {
++  font-weight: bold;
++}
++
++.ace-check--now .ace-check__dot {
++  border-color: var(--v-primary-base);
 +  animation: ace-step-pulse 1.2s infinite ease-in-out;
 +}
 +

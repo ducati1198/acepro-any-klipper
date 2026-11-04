@@ -10,6 +10,7 @@
 #
 # ./installer.sh                 install (asks a few plain questions first)
 # ./installer.sh --update        update the driver and macros, keep your settings
+# ./installer.sh --update --auto  same, but asks nothing and does not restart (used by Software Updates)
 # ./installer.sh --check         report problems, change nothing
 # ./installer.sh --repair        restore links and includes (for example after a Simple AF update)
 # ./installer.sh --undo [DIR]    put back the files saved before the last install
@@ -45,6 +46,7 @@ INSTALL_HOME="${ACE_INSTALL_HOME:-$INSTALL_HOME}"      # tests point this at a f
 TESTING="${ACE_INSTALLER_TEST:-0}"                     # 1 = never restart services, never run pip
 MODE="install"
 DRY=0
+AUTO=0                                                 # 1 = no questions: take every default (--update --auto)
 UNDO_ARG=""
 KLIPPER_DIR="${ACE_KLIPPER_DIR:-}"
 CONFIG_DIR="${ACE_CONFIG_DIR:-}"
@@ -111,6 +113,10 @@ trap cleanup EXIT
 # ask_yn "Question" Y|N ["why"]  -> returns 0 for yes. An empty answer (or no input at all) gives the default.
 ask_yn() {
     local q="$1" def="${2:-N}" w="${3:-}" hint ans
+    if [ "$AUTO" = 1 ]; then
+        [ "$def" = "Y" ] && { echo "  (auto) $q: yes"; return 0; }
+        echo "  (auto) $q: no"; return 1
+    fi
     [ -n "$w" ] && why "$w"
     if [ "$def" = "Y" ]; then hint="[Y/n]"; else hint="[y/N]"; fi
     while true; do
@@ -127,6 +133,7 @@ ask_yn() {
 # ask_text "Question" "default" -> answer on stdout
 ask_text() {
     local q="$1" def="${2:-}" ans
+    if [ "$AUTO" = 1 ]; then echo "$def"; return 0; fi
     if [ -n "$def" ]; then
         read -r -p "$(echo -e "${BLUE}${q}${NC} [${def}]: ")" ans || ans=""
     else
@@ -719,7 +726,18 @@ setup_fluidd_category() {
 ensure_update_manager() {
     local mc="$CONFIG_DIR/moonraker.conf" origin
     [ -f "$mc" ] || { print_info "No moonraker.conf here, so no entry in Software Updates."; return 0; }
-    if grep -qE '^\[update_manager[[:space:]]+acepro\]' "$mc"; then print_success "Software Updates already lists acepro"; return 0; fi
+    if grep -qE '^\[update_manager[[:space:]]+acepro\]' "$mc"; then
+        # Older entry without the install script: add it, so pressing Update also runs the installer.
+        if [ "$(awk '/^\[/{s=($0 ~ /^\[update_manager[ \t]+acepro\]/)} s&&/^install_script:/{f=1} END{print f+0}' "$mc")" = 0 ] && [ -f "$SCRIPT_DIR/tools/post-update.sh" ]; then
+            backup_path "$mc"
+            sed -i '/^\[update_manager[[:space:]]\+acepro\]/a install_script: tools/post-update.sh' "$mc"
+            MOONRAKER_RESTART_NEEDED=1
+            print_success "Software Updates entry for acepro now runs tools/post-update.sh after an update"
+        else
+            print_success "Software Updates already lists acepro"
+        fi
+        return 0
+    fi
     [ -d "$SCRIPT_DIR/.git" ] || { print_info "This download is not a git clone, so no Software Updates entry."; return 0; }
     if [ "$PROFILE" = "saf" ]; then
         print_info "Simple AF may overwrite moonraker.conf when it updates, which would remove this entry."
@@ -735,7 +753,9 @@ path: $SCRIPT_DIR
 origin: $origin
 primary_branch: $(git -C "$SCRIPT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo dev)
 managed_services: klipper
-# This only downloads new driver code. After an update run:  ./installer.sh --update
+# After the download Moonraker runs this: it updates the config files (./installer.sh --update --auto)
+# and puts the Fluidd ACE panel back if a Fluidd update removed it.
+install_script: tools/post-update.sh
 EOF
     MOONRAKER_RESTART_NEEDED=1
     print_success "Added acepro to Software Updates (moonraker.conf). It shows after Moonraker restarts."
@@ -950,6 +970,15 @@ install_python_packages() {
 }
 
 # ---- Fluidd panel -----------------------------------------------------------
+# The panel build that is in ~/fluidd is noted in ~/fluidd/.acepro-panel (the zip's checksum).
+# A Fluidd update from Software Updates wipes the folder, so the note is gone and the panel is put back.
+panel_is_current() { # fluidd_dir
+    local zip="$SCRIPT_DIR/fluidd/fluidd-v1.37.7-acepro.zip" sha
+    [ -f "$zip.sha256" ] || return 1
+    sha="$(cut -d' ' -f1 "$zip.sha256")"
+    [ "$(cat "$1/.acepro-panel" 2>/dev/null)" = "$sha" ] && grep -rlq "Choose ACE spools" "$1/assets" 2>/dev/null
+}
+
 install_fluidd_panel() {
     local fluidd_dir="$1" zip="$SCRIPT_DIR/fluidd/fluidd-v1.37.7-acepro.zip" backup
     [ -f "$zip" ] || { warn_later "Fluidd build not found: $zip"; return 1; }
@@ -973,6 +1002,7 @@ PYZIP
     [ -f "$fluidd_dir/config.json" ] || python3 -I -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extract('config.json', sys.argv[2])" "$zip" "$fluidd_dir"
     chmod -R a+rX "$fluidd_dir" 2>/dev/null || true
     if grep -rlq "Choose ACE spools" "$fluidd_dir/assets" 2>/dev/null; then
+        [ -f "$zip.sha256" ] && cut -d' ' -f1 "$zip.sha256" > "$fluidd_dir/.acepro-panel"
         print_success "Fluidd ACE panel installed (hard-refresh the browser to load it)"
     else
         print_error "The ACE panel was not found after unpacking. Restoring Fluidd."
@@ -1019,6 +1049,11 @@ klippy_state() {
 restart_and_selftest() {
     local pass=0 fail=0 state="" objs n i
     if [ "$TESTING" = 1 ]; then print_info "Test mode: no restart"; return 0; fi
+    if [ "$AUTO" = 1 ]; then
+        print_info "No restart in --auto mode. Moonraker restarts Klipper after a Software Updates update; otherwise run: sudo systemctl restart $KLIPPER_SERVICE"
+        [ "$MOONRAKER_RESTART_NEEDED" = 1 ] && print_info "Restart Moonraker once so it reads the new moonraker.conf entry."
+        return 0
+    fi
     if [ "$MOONRAKER_RESTART_NEEDED" = 1 ]; then ask_yn "Restart Moonraker now?" Y && svc_restart moonraker; fi
     if ask_yn "Restart Klipper now so the changes take effect?" Y; then
         svc_restart "$KLIPPER_SERVICE" || print_warning "Could not restart Klipper. Run: sudo systemctl restart $KLIPPER_SERVICE"
@@ -1166,7 +1201,10 @@ do_install() {
         load_profile "$PROFILE"
         print_success "Profile: $PROFILE_NAME"
         local fl="$INSTALL_HOME/fluidd"
-        if [ -d "$fl" ] && ask_yn "Also refresh the Fluidd ACE panel?" N "only needed if the panel changed."; then WANT_FLUIDD=1; FLUIDD_DIR="$fl"; fi
+        if [ "$AUTO" = 1 ]; then
+            # Put the panel back when a Fluidd update removed it, and refresh it when this repo has a newer build.
+            if [ -d "$fl" ] && ! panel_is_current "$fl"; then WANT_FLUIDD=1; FLUIDD_DIR="$fl"; print_info "The Fluidd ACE panel is missing or old: it will be put back."; fi
+        elif [ -d "$fl" ] && ask_yn "Also refresh the Fluidd ACE panel?" N "only needed if the panel changed."; then WANT_FLUIDD=1; FLUIDD_DIR="$fl"; fi
         [ -d "$INSTALL_HOME/KlipperScreen/panels" ] && WANT_KS=1
         if [ "$PROFILE" = "saf" ]; then
             if [ -n "$(hooks_included_by)" ]; then HOOKS_INCLUDE=present
@@ -1614,6 +1652,7 @@ parse_args() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --update) MODE=update ;;
+            --auto) AUTO=1 ;;
             --check) MODE=check ;;
             --repair|--relink) MODE=repair ;;
             --undo) MODE=undo; if [ "${2:-}" ] && [ "${2:0:2}" != "--" ]; then UNDO_ARG="$2"; shift; fi ;;
@@ -1633,6 +1672,9 @@ parse_args() {
 
 main() {
     parse_args "$@"
+    if [ "$AUTO" = 1 ] && [ "$MODE" != update ]; then
+        echo "--auto only works together with --update (it asks nothing, so it only updates an existing install)."; exit 64
+    fi
     command -v python3 >/dev/null 2>&1 || die_with_fix "python3 is not installed" "sudo apt-get install -y python3"
     case "$MODE" in
         install|update) do_install ;;

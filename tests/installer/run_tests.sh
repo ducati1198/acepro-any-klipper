@@ -392,5 +392,35 @@ check "blade moves check positions"                  bash -c 'for m in TO_BLADE 
 check "no fixed 2.5 left in the zigzag wipe"         bash -c '! sed -n "/gcode_macro _WIPE_ZIGZAG/,/Servo Shake Macro/p" "$0/config/acepro_macros.cfg" | grep -q "[+-] 2.5}"' "$REPO"
 check "no commented-out G9111 macro left"            bash -c '! grep -q "^# *\[gcode_macro G9111\]" "$0/config/acepro.cfg"' "$REPO"
 
+echo "27. Software Updates install script and --auto"
+H="$(new_home t27)"; C="$(cfg "$H")"
+inst "$H" "$A_KLIPPER"
+mkdir -p "$H/fluidd/assets"; echo stock > "$H/fluidd/index.html"; echo '{}' > "$H/fluidd/config.json"
+printf '[server]\nhost: 0.0.0.0\n\n[update_manager acepro]\ntype: git_repo\npath: /home/pi/acepro-any-klipper\norigin: https://example.invalid/x\nprimary_branch: dev\nmanaged_services: klipper\n\n[update_manager other]\ntype: web\n' > "$C/moonraker.conf"
+inst "$H" "" --update --auto
+check "--update --auto finished with no answers"     test "$RC" -eq 0
+check "Fluidd ACE panel put back"                    grep -rlq "Choose ACE spools" "$H/fluidd/assets"
+check "panel note written"                           test -s "$H/fluidd/.acepro-panel"
+check "Fluidd settings kept"                         grep -q '{}' "$H/fluidd/config.json"
+check "install_script added to the acepro entry"     grep -q '^install_script: tools/post-update.sh' "$C/moonraker.conf"
+check "install_script sits inside the acepro entry"  test "$(awk '/^\[/{s=($0 ~ /acepro\]/)} s&&/^install_script:/{n++} END{print n+0}' "$C/moonraker.conf")" -eq 1
+check "other entries untouched"                      grep -q '^\[update_manager other\]' "$C/moonraker.conf"
+check "no restart in --auto mode"                    bash -c 'echo "$0" | grep -qiE "No restart|Test mode"' "$OUT"
+inst "$H" "" --update --auto
+check "second --auto run finished"                   test "$RC" -eq 0
+check "panel not reinstalled when current"           bash -c '! echo "$0" | grep -q "will be put back"' "$OUT"
+check "install_script not added twice"               test "$(grep -c '^install_script:' "$C/moonraker.conf")" -eq 1
+rm -rf "$H/fluidd/assets" "$H/fluidd/.acepro-panel"; mkdir -p "$H/fluidd/assets"
+inst "$H" "" --update --auto
+check "panel put back again after a Fluidd update"   grep -rlq "Choose ACE spools" "$H/fluidd/assets"
+inst "$H" "" --auto;  check "--auto alone is refused" test "$RC" -eq 64
+check "post-update.sh runs the auto update"          grep -q -- '--update --auto' "$REPO/tools/post-update.sh"
+check "new entries get install_script"               grep -q '^install_script: tools/post-update.sh' "$REPO/installer.sh"
+check "ACE_SET_PHASE command registered"             grep -q '"ACE_SET_PHASE", cmd_ACE_SET_PHASE' "$REPO/extras/ace/commands.py"
+check "macros report the steps"                      bash -c 'for p in heat cut purge wipe; do grep -q "ACE_SET_PHASE PHASE=$p" "$0/config/acepro_macros.cfg" || exit 1; done' "$REPO"
+check "driver publishes the phase and steps"         bash -c 'grep -q "toolchange_phase" "$0/extras/ace/manager.py" && grep -q "toolchange_steps" "$0/extras/ace/manager.py"' "$REPO"
+check "unload waits before the ACE pulls"            bash -c 'grep -q "_start_queued_toolhead_moves()" "$0/extras/ace/manager.py" && grep -q "monotonic() + 0.25" "$0/extras/ace/manager.py"' "$REPO"
+check "Fluidd Unload buttons run UNLOAD_TOOL"        bash -c '! grep -qE "aceSendGcode\(.TR.\)|run\(.TR., true\)" "$0/fluidd/fluidd-acepro.patch"' "$REPO"
+
 echo "Passed: $PASS   Failed: $FAIL"
 [ "$FAIL" -eq 0 ]

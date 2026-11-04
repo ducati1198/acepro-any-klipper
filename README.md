@@ -252,6 +252,7 @@ The installer asks a few plain questions, shows exactly what it will change, and
 | Command | What it does |
 |---|---|
 | `./installer.sh --update` | Update the driver and macros. Your values (positions, speeds, pins) are kept. |
+| `./installer.sh --update --auto` | The same without any questions or restart. Moonraker runs it after you press Update on the acepro entry in Software Updates. |
 | `./installer.sh --check` | Look for problems. Changes nothing. |
 | `./installer.sh --repair` | Restore the driver links and the include line (use it after a Simple AF or Fluidd update). |
 | `./installer.sh --undo` | Put back the files saved before the last install. |
@@ -766,7 +767,7 @@ The installer puts the ACE macros into their own Fluidd category, **ACEPRO MACRO
 
 ### Software Updates and "what changed"
 
-The installer adds `[update_manager acepro]` to `moonraker.conf` (saved first), so the repo shows up in Fluidd's Software Updates page and you can pull new driver code there. On Simple AF it asks first, because Simple AF may overwrite `moonraker.conf`. The page only downloads code; run `./installer.sh --update` afterwards to refresh the config files. After `--update` the installer prints the `CHANGELOG.md` entries newer than the version you had.
+The installer adds `[update_manager acepro]` to `moonraker.conf` (saved first), so the repo shows up in Fluidd's Software Updates page and you can pull new driver code there. On Simple AF it asks first, because Simple AF may overwrite `moonraker.conf`. After the download Moonraker runs `tools/post-update.sh` (the entry's `install_script`), which runs `./installer.sh --update --auto`: no questions, your settings are kept, a backup is made first (`--undo` brings it back), nothing runs during a print, and Klipper is restarted by Moonraker afterwards. It also puts the Fluidd ACE panel back when a Fluidd update from the same page removed it (the panel build is v1.37.7, so this also sets Fluidd back to v1.37.7). The output is in `~/printer_data/logs/acepro-update.log`. An entry made by an older installer gets the `install_script` line on the next `--update`; restart Moonraker once so it reads it. If Moonraker says the repo is dirty, you have local edits in the clone: `git stash` them, then update. After `--update` the installer prints the `CHANGELOG.md` entries newer than the version you had.
 
 ### Undo
 

@@ -2687,6 +2687,12 @@ def cmd_ACE_COUNT_CUT(gcmd):
     ace_get_manager(0).record_stat("cuts", 1)
 
 
+def cmd_ACE_SET_PHASE(gcmd):
+    """Tell the panel which tool-change step is running (used by the macros)."""
+    manager = ace_get_manager(0)
+    manager.set_phase(gcmd.get("PHASE", "").lower(), drop=(gcmd.get("DROP", "") or "").lower())
+
+
 def cmd_ACE_RESET_STATS(gcmd):
     """Reset the usage counters (cuts, tool changes, purge). [WHAT=cuts|tool_changes|purge_mm]"""
     manager = ace_get_manager(0)
@@ -2759,6 +2765,7 @@ ACE_COMMANDS = [
     ("ACE_CLEAR_ENDLESS_CHAIN", cmd_ACE_CLEAR_ENDLESS_CHAIN, "Remove all endless spool chains, or one: TOOL=<n>"),
     ("ACE_GET_ENDLESS_CHAIN", cmd_ACE_GET_ENDLESS_CHAIN, "Show the endless spool chains"),
     ("ACE_COUNT_CUT", cmd_ACE_COUNT_CUT, "Count one filament cut (used by CUT_TIP)"),
+    ("ACE_SET_PHASE", cmd_ACE_SET_PHASE, "Set the shown tool-change step: PHASE=heat|cut|retract|load|purge|wipe [DROP=<step>]"),
     ("ACE_RESET_STATS", cmd_ACE_RESET_STATS, "Reset usage counters [WHAT=cuts|tool_changes|purge_mm]"),
     ("ACE_SET_ENDLESS_SPOOL_MODE", cmd_ACE_SET_ENDLESS_SPOOL_MODE,
      "Set endless spool match mode. MODE=exact|material|next"),
