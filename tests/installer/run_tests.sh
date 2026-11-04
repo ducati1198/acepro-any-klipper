@@ -380,5 +380,11 @@ echo "16. Validator: a broken symlink include is an error, not a crash"
 mkdir -p "$ROOT/t16"; printf '[include broken.cfg]\n' > "$ROOT/t16/printer.cfg"; ln -sf /nonexistent/x "$ROOT/t16/broken.cfg"
 check "reports it as an error, no traceback"         bash -c 'out="$(python3 -I "$0/tools/validate_config.py" "$1" 2>&1)"; echo "$out" | grep -q "cannot be read" && ! echo "$out" | grep -q Traceback' "$REPO" "$ROOT/t16/printer.cfg"
 
+echo "17. Resume: the retract after the wipe is there, the old pre-wipe variable is gone"
+check "resume retracts after the wipe (hook)"        bash -c 'sed -n "/gcode_macro _ACE_ON_RESUME/,\$p" "$0/config/acepro_printer_macros.cfg" | grep -q "G1 E-{post_wipe_retract + unretract}"' "$REPO"
+check "resume retracts after the wipe (RESUME)"      grep -q "G1 E-{post_wipe_retract} F1800" "$REPO/config/acepro_printer_macros.cfg"
+check "no pre_wipe_retract left"                     bash -c '! grep -rq pre_wipe_retract "$0/config" "$0/variants"' "$REPO"
+check "new resume settings exist"                    bash -c 'grep -q "variable_resume_pre_purge_retract" "$0/config/acepro_macros.cfg" && grep -q "variable_resume_extra_prime: 0.0" "$0/config/acepro_macros.cfg"' "$REPO"
+
 echo "Passed: $PASS   Failed: $FAIL"
 [ "$FAIL" -eq 0 ]
