@@ -1771,6 +1771,9 @@ class AceManager:
                     )
                     instance._disable_feed_assist(local_slot)
 
+                # Let the cut / move-to-chute finish before anything pulls.
+                self._wait_toolhead_move_finished()
+
                 self.gcode.respond_info(
                     f"ACE: Retracting T{tool_index} "
                     f"({retract_length:.3f}mm at {retract_speed:.3f}mm/s)"
@@ -1794,6 +1797,11 @@ class AceManager:
                 else:
                     # Start extruder retraction (10% faster for slack)
                     self._extruder_move(-abs(retract_length), retract_speed * 1.10, wait_for_move_end=False)
+                    # Hand it to the stepper now instead of sitting in look-ahead
+                    self._start_queued_toolhead_moves()
+                    # Give the extruder a head start so it has hold of the
+                    # filament before the ACE begins pulling.
+                    self.reactor.pause(self.reactor.monotonic() + 0.25)
 
                     # Start ACE retraction — use the RDM early stop only when the
                     # RDM actually sees filament right now.  Its callback stops the
