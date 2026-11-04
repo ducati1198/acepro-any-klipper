@@ -385,6 +385,19 @@ find_dirs() {
 
 CONF_FILE() { echo "$CONFIG_DIR/acepro-install.conf"; }
 
+# On --update the questions are not asked again, so read what is really installed.
+# (Without this the saved answers would say "no servo" for every update.)
+read_installed_hardware() {
+    local m="$CONFIG_DIR/acepro_macros.cfg" v
+    if [ -f "$CONFIG_DIR/acepro_servo.cfg" ] || grep -qE '^\[servo servo_wipe\]' "$m" 2>/dev/null; then HAVE_SERVO=1; else HAVE_SERVO=0; fi
+    v="$(cfg_get "$m" "gcode_macro _ACE_VARS" variable_servo_enable | tr 'A-Z' 'a-z')"
+    [ "$v" = "false" ] && HAVE_SERVO=0
+    v="$(cfg_get "$m" "gcode_macro _ACE_VARS" variable_cutter_enable | tr 'A-Z' 'a-z')"
+    if [ "$v" = "false" ]; then HAVE_CUTTER=0; else HAVE_CUTTER=1; fi
+    v="$(cfg_get "$m" "gcode_macro _ACE_VARS" variable_poop_enable | tr 'A-Z' 'a-z')"
+    if [ "$v" = "false" ]; then HAVE_POOP=0; else HAVE_POOP=1; fi
+}
+
 save_answers() {
     local f; f="$(CONF_FILE)"
     {
@@ -1139,6 +1152,7 @@ do_install() {
                 print_info "Profile from your last install: $PROFILE"
             fi
             ACE_COUNT="$(cfg_get "$CONFIG_DIR/acepro_setting.cfg" ace ace_count)"; ACE_COUNT="${ACE_COUNT:-1}"
+            read_installed_hardware
         fi
     fi
 

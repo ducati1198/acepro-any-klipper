@@ -329,6 +329,12 @@ check "update lists what changed"                    grep -q "What changed since
 check "lists the new version's entries"              grep -q "ACE_SELFTEST" <<<"$OUT"
 inst "$H" 'y\ny\ny\ny\n' --update
 check "same version: nothing new"                    grep -q "Nothing new since your last install" <<<"$OUT"
+# saved answers must describe what is installed, not the defaults (servo was saved as "0" before)
+[ -f "$C/acepro_servo.cfg" ] || printf '[servo servo_wipe]\npin: PB14\n' > "$C/acepro_servo.cfg"
+sed -i 's/^HAVE_SERVO=.*/HAVE_SERVO="0"/' "$C/acepro-install.conf"
+inst "$H" 'y\ny\ny\ny\n' --update
+check "update saves HAVE_SERVO=1 when a servo is installed" grep -q '^HAVE_SERVO="1"' "$C/acepro-install.conf"
+check "update saves the cutter answer"               grep -q '^HAVE_CUTTER="1"' "$C/acepro-install.conf"
 inst "$H" 'y\n' --uninstall
 check "uninstall removes the entry"                  test -z "$(grep 'update_manager acepro' "$C/moonraker.conf")"
 check "uninstall keeps your moonraker lines"         grep -q '^host: 0.0.0.0' "$C/moonraker.conf"
@@ -369,6 +375,10 @@ check "no second [force_move] in printer.cfg"        test -z "$(grep '^\[force_m
 echo "15. Validator: inline comments inside a template are not errors"
 printf '[gcode_macro T]\ngcode:\n  {%% set a = 1 if x == ""   # why\n        else 2 %%}\n  M117 {a}\n' > "$ROOT/t15.cfg"
 check "no template error"                            bash -c 'python3 -I "$0/tools/validate_config.py" "$1" --profile klipper | grep -q "template error" && exit 1 || exit 0' "$REPO" "$ROOT/t15.cfg"
+
+echo "16. Validator: a broken symlink include is an error, not a crash"
+mkdir -p "$ROOT/t16"; printf '[include broken.cfg]\n' > "$ROOT/t16/printer.cfg"; ln -sf /nonexistent/x "$ROOT/t16/broken.cfg"
+check "reports it as an error, no traceback"         bash -c 'out="$(python3 -I "$0/tools/validate_config.py" "$1" 2>&1)"; echo "$out" | grep -q "cannot be read" && ! echo "$out" | grep -q Traceback' "$REPO" "$ROOT/t16/printer.cfg"
 
 echo "Passed: $PASS   Failed: $FAIL"
 [ "$FAIL" -eq 0 ]

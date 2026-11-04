@@ -3,6 +3,7 @@
 ## 1.1.0 (safer installs, uninstall, doctor, position wizard)
 
 - **Simple AF hooks: no `ZERO_OUT_SERVO` in the heating nozzle (start and end), cancel, filament runout and nozzle wipe hooks.** The template no longer adds it there. Lines already in your own file stay as they are.
+- **Fixes.** `--update` saved "no servo" in `acepro-install.conf` for every install; it now reads what is installed (servo, cutter, poop bucket). The config check no longer crashes on a broken symlink include; it reports an error. The unused `variable_cut_retract_distance` is removed.
 - **One ACE temperature sensor per unit.** With 1 unit you get `acepro_temp_1`, with 2 you also get `acepro_temp_2`, with 3 you get `acepro_temp_3`. The extra ones are commented out.
 - **Refuses to run while a print is active** (printing or paused). No override. `--check`, `--support-bundle` and `--dry-run` still work.
 - **Virtual-pin order warning.** If a file uses `virtual_pin:` before `[virtual_pins]` is loaded (Klipper: "Unknown pin chip name 'virtual_pin'"), the installer and the config check say so; the installer offers to add `[virtual_pins]` at the top of `printer.cfg` (saved first, only on yes).

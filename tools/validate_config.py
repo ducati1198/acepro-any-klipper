@@ -58,7 +58,11 @@ def collect(path, res, seen=None, depth=0):
         return []
     seen.add(real)
     items = []
-    lines = read_config_lines(path)
+    try:
+        lines = read_config_lines(path)
+    except OSError as exc:      # unreadable file or a broken symlink: report it, do not crash
+        res.errors.append("%s  cannot be read (%s)" % (path, exc.strerror or exc))
+        return []
     base = os.path.dirname(path)
     section = None
     cur = None  # (option, [value lines], line_no)
