@@ -5,7 +5,7 @@
 # name = "Spool and Toolhead Mapper"
 # description = "One plugin for two printers: ACE Pro (acepro-any-klipper) and WonderMaker ZR Ultra-S toolheads. It asks the printer which one it is, shows the spools or toolheads in a panel, and writes the choice into the G-code (ACE_SET_TOOL_MAP or WM_SET_TOOL_MAP)."
 # author = "ducati1198"
-# version = "0.3.0"
+# version = "0.3.1"
 # ///
 """Spool and Toolhead Mapper for OrcaSlicer 2.5.
 
@@ -543,7 +543,8 @@ PANEL_HTML = r"""
 </div>
 <div id="rows"></div>
 <label class="chk"><input type="checkbox" id="enabled"> Write this map into G-code when sending</label>
-<div class="muted" style="margin-top:6px">Needs “Spool and Toolhead Map” in Process › Others › Slicing Pipeline Plugin.</div>
+<div class="muted" style="margin-top:6px" id="what">When ticked, your picks are written as one line near the top of the G-code, so the printer uses them at print start. Untick it to send the file as sliced.</div>
+<div class="muted" style="margin-top:6px"><b>One-time setup:</b> switch Orca to Advanced mode, open Process › Others › Slicing Pipeline Plugin, add “Spool and Toolhead Map” and save the process preset (for each process preset you print with). Without this step nothing is written, even when the box is ticked.</div>
 <div class="muted" id="last"></div>
 <div class="err" id="error"></div>
 <script>
@@ -571,6 +572,9 @@ PANEL_HTML = r"""
     document.getElementById("title").textContent = state.kind === "wm" ? "WonderMaker toolheads" :
       (state.kind === "ace" ? "ACE Pro spools" : "Spools and toolheads");
     document.getElementById("enabled").checked = !!state.enabled;
+    var macro = state.kind === "wm" ? "WM_SET_TOOL_MAP" : (state.kind === "ace" ? "ACE_SET_TOOL_MAP" : "WM_SET_TOOL_MAP or ACE_SET_TOOL_MAP");
+    document.getElementById("what").textContent = "When ticked, your picks are written as one line (" + macro +
+      ") near the top of the G-code, so the printer uses them at print start. Untick it to send the file as sliced.";
     document.getElementById("error").textContent = state.error || "";
     document.getElementById("last").textContent = state.last ? "Last G-code: " + state.last : "";
     var html = "";
