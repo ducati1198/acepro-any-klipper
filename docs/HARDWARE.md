@@ -27,6 +27,16 @@ The sensor pins are set in `acepro.cfg` (section 4.2 of the main README).
 
 The driver detects which protocol a unit speaks (`protocol: auto` in `acepro_setting.cfg`). The rest of this page is about the first-generation ACE Pro, which is what this setup uses.
 
+
+#### ACE 2 Pro: what is known (not tested in this project)
+
+- **It talks RS-485, not USB.** Use Anycubic's own [ACE 2 PRO USB to RS485 Signal Cable](https://ca.anycubic.com/products/ace-2-pro-usb-to-rs485-signal-cable) (the store lists it for the Kobra S1 ACE 2 Pro, Kobra 3, Kobra 3 V2, Kobra 3 Max and Kobra 3 Max V2). Do not build one yourself: no wiring or pinout is published. Anycubic's wiki has a page called [compatibility guide for other models](https://wiki.anycubic.com/en/fdm-3d-printer/ace-2-pro/compatibility-guide-for-other-models).
+- **Use the right cable.** The upstream [Kobra-S1/ACEPRO](https://github.com/Kobra-S1/ACEPRO) project, which this driver comes from, says you need the KS1/K3 ACE 2 conversion cable, and that a Kobra-X or KS1-Max cable will not work on a KS1, K3 or Raspberry Pi.
+- **Driver.** The ACE driver here has an ACE 2 adapter (protobuf over a shared RS-485 bus, 230400 baud). `protocol: auto` picks the right one, and `protocol: ace2` forces it. Nobody has tried it with this setup yet.
+- **Installer.** Its "do I see an ACE on USB" check looks for `anycubic`, `ace` or `28e9` in the device list. An RS-485 adapter may be listed under another name. The installer then only prints a warning and carries on.
+
+If you try it, please report what `lsusb` and the driver log show.
+
 ## 3. USB adapter for the ACE Pro
 
 <div align="center">
