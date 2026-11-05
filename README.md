@@ -429,10 +429,10 @@ Also check:
 
 ### 5.3 ACE Spool Mapper plugin
 
-The plugin lets you choose the physical spool for each sliced filament inside Orca. Full guide: [`orca_plugin/INSTALL.md`](orca_plugin/INSTALL.md).
+The plugin lets you choose the physical spool for each sliced filament inside Orca. Full guide: [`orca_plugin/INSTALL.md`](orca_plugin/INSTALL.md). The newer [`spool_toolhead_mapper.py`](orca_plugin/spool_toolhead_mapper.py) does the same for the ACE Pro and also for WonderMaker toolheads (it detects which printer it is talking to); the screenshot below is from that plugin.
 
 <div align="center">
-<img src="orca_plugin/panel-preview.png" alt="ACE Spools panel in OrcaSlicer" width="70%">
+<img src="orca_plugin/spool-toolhead-mapper-ace.png" alt="Spools and Toolheads panel in OrcaSlicer with an ACE Pro on a K1 Max" width="80%">
 </div>
 
 1. In OrcaSlicer 2.5 or newer open **File → Plugins**.
