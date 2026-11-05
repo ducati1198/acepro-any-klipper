@@ -5,7 +5,7 @@
 # name = "Spool and Toolhead Mapper"
 # description = "One plugin for two printers: ACE Pro (acepro-any-klipper) and WonderMaker ZR Ultra-S toolheads. It asks the printer which one it is, shows the spools or toolheads in a panel, and writes the choice into the G-code (ACE_SET_TOOL_MAP or WM_SET_TOOL_MAP)."
 # author = "ducati1198"
-# version = "0.2.0"
+# version = "0.3.0"
 # ///
 """Spool and Toolhead Mapper for OrcaSlicer 2.5.
 
@@ -34,6 +34,7 @@ Two capabilities:
   auto-matches against what it can read from the printer.
 """
 import json
+import os
 import re
 import time
 import urllib.error
@@ -44,6 +45,8 @@ import orca
 
 SLOTS_PER_ACE = 4
 HEADS = 4
+COLOUR_WARN = 300   # colour_distance above this (e.g. blue vs light blue) is shown as a warning
+SAVE_FILE = os.path.join(os.path.expanduser("~"), ".spool_toolhead_mapper.json")
 KINDS = {"ace": "ACE_SET_TOOL_MAP", "wm": "WM_SET_TOOL_MAP"}
 DEFAULT_TIMEOUT_S = 3.0
 # Your printer (Moonraker). Change it in Plugins > Spool and Toolhead Mapper > Config, or leave it empty to use
@@ -60,6 +63,7 @@ STATE = {
     "signature": [],       # [(colour, type)] per filament when choices were made
     "enabled": True,       # write the map into exported G-code
     "last_written": "",    # human readable summary of the last post-process
+    "saved": None,         # picks kept between Orca sessions: {printer base URL: {"signature": ..., "choices": ...}}
 }
 
 
@@ -426,6 +430,72 @@ def _prune_choices(filaments):
     STATE["signature"] = new
 
 
+def warnings_for(filaments, spools, resolved, kind="ace"):
+    """Hints shown under each filament: {filament index: [text]}. Never blocks anything."""
+    by_tool = {s["tool"]: s for s in spools}
+    name = (lambda t: f"Toolhead {t + 1}") if kind == "wm" else (lambda t: f"T{t}")
+    users = {}
+    for f in filaments:
+        t = resolved.get(f["index"])
+        if t is not None:
+            users.setdefault(t, []).append(f["index"])
+    out = {}
+    for f in filaments:
+        t = resolved.get(f["index"])
+        sp = by_tool.get(t)
+        msgs = []
+        if t is not None and len(users.get(t, [])) > 1:
+            others = ", ".join(str(i + 1) for i in users[t] if i != f["index"])
+            msgs.append(f"{name(t)} is also used by filament {others}")
+        if sp is not None and not sp.get("ready") and kind == "wm":
+            msgs.append(f"{name(t)} shows empty: load filament before you start")
+        if sp is not None and sp.get("ready") and f.get("colour") and sp.get("colour") \
+                and color_distance(f["colour"], sp["colour"]) > COLOUR_WARN:
+            msgs.append(f"colour differs from {name(t)}")
+        if msgs:
+            out[f["index"]] = msgs
+    return out
+
+
+def load_saved(path=None):
+    """Picks kept from an earlier session. Never raises: a missing or unreadable file means no saved picks."""
+    try:
+        with open(path or SAVE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_picks(base, signature, choices, path=None):
+    """Remember the picks for this printer. Best effort: Orca may not allow writing a file, then picks last for the session."""
+    saved = STATE.get("saved")
+    if saved is None:
+        saved = STATE["saved"] = load_saved(path)
+    if choices:
+        saved[base or ""] = {"signature": signature, "choices": dict(choices)}
+    else:
+        saved.pop(base or "", None)
+    try:
+        with open(path or SAVE_FILE, "w", encoding="utf-8") as f:
+            json.dump(saved, f)
+    except OSError:
+        pass
+
+
+def restore_picks(base, filaments, path=None):
+    """Put back this printer's saved picks when the project's filaments are the same as when they were made."""
+    saved = STATE.get("saved")
+    if saved is None:
+        saved = STATE["saved"] = load_saved(path)
+    entry = saved.get(base or "") or {}
+    sig = _signature(filaments)
+    if entry.get("signature") == sig and isinstance(entry.get("choices"), dict):
+        STATE["choices"], STATE["signature"] = dict(entry["choices"]), sig
+        return True
+    return False
+
+
 def _config(cap):
     try:
         cfg = json.loads(cap.get_config() or "{}")
@@ -513,7 +583,7 @@ PANEL_HTML = r"""
       var items = [{ value: "auto", colour: sp && sp.ready ? sp.colour : "", label: "Auto" + (sp ? " → " + spoolLabel(sp) : "") },
                    { value: "sliced", colour: asSliced && asSliced.ready ? asSliced.colour : "", label: "As sliced (" + (state.kind === "wm" ? "Toolhead " + (f.index + 1) : "T" + f.index) + ")" }];
       state.spools.forEach(function (s) {
-        items.push({ value: String(s.tool), colour: s.ready ? s.colour : "", label: spoolLabel(s), off: !s.ready });
+        items.push({ value: String(s.tool), colour: s.ready ? s.colour : "", label: spoolLabel(s), off: !s.ready && state.kind !== "wm" });
       });
       var cur = items.filter(function (it) { return it.value === choice; })[0] || items[0];
       var list = items.map(function (it) {
@@ -530,6 +600,7 @@ PANEL_HTML = r"""
               '<div class="name">Filament ' + (f.index + 1) + ' · ' + esc(f.type || "?") +
               (f.name ? ' <span class="muted">' + esc(f.name) + '</span>' : '') + '</div>' +
               dd +
+              ((state.warnings[String(f.index)] || []).map(function (w) { return '<div class="hint warn">' + esc(w) + '</div>'; }).join('')) +
               (sp ? '<div class="hint"><span class="dot" style="display:inline-block;width:10px;height:10px;vertical-align:middle;background:' +
                     esc(sp.colour) + '"></span> prints from ' + esc(spoolLabel(sp)) + '</div>' : '') + warn + '</div>';
     });
@@ -558,6 +629,7 @@ PANEL_HTML = r"""
     orca.postMessage({ command: "enable", value: e.target.checked });
   });
   orca.postMessage({ command: "refresh" });
+  setInterval(function () { orca.postMessage({ command: "tick" }); }, 3000);   // notices a printer switch
 })();
 </script>
 """
@@ -605,6 +677,7 @@ class SpoolsPanel(orca.script.ScriptPluginCapabilityBase):
 
     def _refresh(self):
         self.error = ""
+        old_base, old_kind = STATE["spools_base"], STATE["kind"]
         base = self._base()
         if not base:
             self.error = "Set the printer's host (Printer settings › Connection / print host) or printer_url in the plugin settings."
@@ -614,6 +687,9 @@ class SpoolsPanel(orca.script.ScriptPluginCapabilityBase):
             spools, kind = fetch_spools(base, _bundle_value("printhost_apikey") or "",
                                         float(cfg.get("timeout_s", DEFAULT_TIMEOUT_S)))
             STATE.update(spools=spools, spools_base=base, spools_time=time.time(), kind=kind)
+            if (base, kind) != (old_base, old_kind):    # another printer: its picks, not the last one's
+                STATE["choices"], STATE["signature"] = {}, []
+                restore_picks(base, _current_project())
         except PermissionError as e:
             self.error = f"OrcaSlicer blocked the network request ({e}). Allow it when asked, then Refresh."
         except Exception as e:  # noqa: BLE001 - shown to the user
@@ -623,6 +699,8 @@ class SpoolsPanel(orca.script.ScriptPluginCapabilityBase):
         if self.panel is None:
             return
         filaments = _current_project()
+        if not STATE["choices"] and not STATE["signature"]:
+            restore_picks(STATE["spools_base"] or self._base(), filaments)
         _prune_choices(filaments)
         resolved = resolve_mapping(filaments, STATE["spools"], STATE["choices"])
         self.panel.post({
@@ -632,6 +710,7 @@ class SpoolsPanel(orca.script.ScriptPluginCapabilityBase):
             "filaments": filaments,
             "spools": STATE["spools"],
             "kind": STATE["kind"],
+            "warnings": {str(k): v for k, v in warnings_for(filaments, STATE["spools"], resolved, STATE["kind"]).items()},
             "units": len({s["unit"] for s in STATE["spools"]}) or 1,
             "choices": STATE["choices"],
             "resolved": {str(k): v for k, v in resolved.items()},
@@ -646,10 +725,18 @@ class SpoolsPanel(orca.script.ScriptPluginCapabilityBase):
         command = message.get("command")
         if command == "refresh":
             self._refresh()
+        elif command == "tick":
+            base = self._base()
+            if base and base != STATE["spools_base"]:      # the printer preset changed: read the new printer
+                self._refresh()
+            else:
+                return
         elif command == "set":
             STATE["choices"][str(int(message.get("index", 0)))] = str(message.get("choice", "auto"))
+            save_picks(STATE["spools_base"], STATE["signature"], STATE["choices"])
         elif command == "reset":
             STATE["choices"].clear()
+            save_picks(STATE["spools_base"], STATE["signature"], STATE["choices"])
         elif command == "enable":
             STATE["enabled"] = bool(message.get("value"))
         self._push()
@@ -705,6 +792,8 @@ class SpoolToolheadMap(orca.slicing.SlicingPipelineCapabilityBase):
             return orca.ExecutionResult.success("Spool and Toolhead Map: " + STATE["last_written"])
         name = {"ace": "ACE", "wm": "WonderMaker"}[kind]
 
+        if not STATE["choices"] and not STATE["signature"]:
+            restore_picks(base, filaments)
         sig_ok = STATE.get("signature") == _signature(filaments)
         choices = STATE["choices"] if sig_ok else {}
         if not spools and not any(str(c).isdigit() for c in choices.values()):
