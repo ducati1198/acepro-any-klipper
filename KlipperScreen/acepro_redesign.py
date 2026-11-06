@@ -101,11 +101,15 @@ class Panel(base.Panel):
         self.ax_tc_active = False
 
         self._ax_portrait = self._is_portrait()
+        sw_, sh_ = self._screen_size()
         try:
-            h = min(Gdk.Screen.get_default().get_width(), Gdk.Screen.get_default().get_height())
+            cw, ch = int(self._gtk.content_width), int(self._gtk.content_height)
+            short = min(cw, ch) if cw > 0 and ch > 0 else min(sw_, sh_)
         except Exception:
-            h = 600
-        self.ax_scale = 0.85 if h <= 480 else 1.0
+            short = min(sw_, sh_)
+        # Design size: 600 px on the short side of the content area.
+        self.ax_scale = max(0.55, min(1.6, short / 600.0))
+        self.ax_compact = min(sw_, sh_) <= 360 or short <= 300
         self._ax_css()
 
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL if self._ax_portrait
@@ -124,8 +128,12 @@ class Panel(base.Panel):
         nav.set_homogeneous(True)
         nav.get_style_context().add_class("ax-nav")
         self.ax_nav_btns = {}
-        for key, text in (("home", "Home"), ("tools", "Tools"), ("dryer", "Dryer"),
-                          ("status", "Status"), ("check", "Print"), ("settings", "Settings")):
+        names = (("home", "Home"), ("tools", "Tools"), ("dryer", "Dryer"),
+                 ("status", "Status"), ("check", "Print"), ("settings", "Settings"))
+        if self.ax_compact:
+            names = (("home", "Home"), ("tools", "Tools"), ("dryer", "Dry"),
+                     ("status", "Stat"), ("check", "Print"), ("settings", "Set"))
+        for key, text in names:
             b = Gtk.Button(label=text)
             b.get_style_context().add_class("ax-navbtn")
             b.connect("clicked", lambda _b, k=key: self._show(k))
@@ -168,26 +176,38 @@ class Panel(base.Panel):
     def add_custom_css(self):
         super().add_custom_css()
 
+    def _screen_size(self):
+        try:
+            scr = Gdk.Screen.get_default()
+            return scr.get_width(), scr.get_height()
+        except Exception:
+            return 600, 1024
+
+    def _is_portrait(self):
+        w, h = self._screen_size()
+        return h > w
+
     def _ax_css(self):
         s = self.ax_scale
-        px = lambda n: int(round(n * s))
+        px = lambda n: max(1, int(round(n * s)))
+        fs = lambda n: max(10, int(round(n * s)))
         css = f"""
         .ax-root {{ background: {BG}; }}
         .ax-nav {{ background: #0b0c0d; padding: 4px; }}
         .ax-navbtn {{ background: {CARD}; color: {TEXT}; border-radius: 10px; border: none;
-                     font-size: {px(14)}px; min-height: {px(44)}px; min-width: 0; padding: 0 {px(4)}px; }}
+                     font-size: {fs(14)}px; min-height: {px(44)}px; min-width: 0; padding: 0 {px(4)}px; }}
         .ax-navbtn.ax-on {{ background: {CARD2}; box-shadow: inset 0 -3px 0 {GREEN}; font-weight: bold; }}
         .ax-card {{ background: {CARD}; border-radius: 14px; padding: {px(10)}px; }}
-        .ax-h1 {{ font-size: {px(26)}px; font-weight: bold; color: {TEXT}; }}
-        .ax-h2 {{ font-size: {px(19)}px; font-weight: bold; color: {TEXT}; }}
-        .ax-t {{ font-size: {px(16)}px; color: {TEXT}; }}
-        .ax-m {{ font-size: {px(13)}px; color: {MUTED}; }}
-        .ax-sec {{ font-size: {px(13)}px; color: {MUTED}; margin-top: {px(6)}px; }}
+        .ax-h1 {{ font-size: {fs(26)}px; font-weight: bold; color: {TEXT}; }}
+        .ax-h2 {{ font-size: {fs(19)}px; font-weight: bold; color: {TEXT}; }}
+        .ax-t {{ font-size: {fs(16)}px; color: {TEXT}; }}
+        .ax-m {{ font-size: {fs(13)}px; color: {MUTED}; }}
+        .ax-sec {{ font-size: {fs(13)}px; color: {MUTED}; margin-top: {px(6)}px; }}
         .ax-ok {{ color: {GREEN}; }} .ax-bad {{ color: {RED}; }} .ax-warn {{ color: {AMBER}; }}
         .ax-btn {{ background: #090a0b; color: {TEXT}; border: none; border-radius: 12px;
-                  font-size: {px(16)}px; min-height: {px(48)}px; padding: 0 {px(10)}px;
+                  font-size: {fs(16)}px; min-height: {px(48)}px; padding: 0 {px(10)}px;
                   box-shadow: inset 0 -4px 0 #4a5057; }}
-        .ax-btn.ax-small {{ min-height: {px(30)}px; font-size: {px(13)}px; padding: 0 {px(10)}px; }}
+        .ax-btn.ax-small {{ min-height: {px(30)}px; font-size: {fs(13)}px; padding: 0 {px(10)}px; }}
         .ax-btn:disabled {{ opacity: 0.4; }}
         .ax-btn.ax-green {{ background: {GREEN}; color: #04140c; font-weight: bold; box-shadow: inset 0 -4px 0 #0f7c4a; }}
         .ax-btn.ax-red {{ background: {RED}; color: #1a0309; font-weight: bold; box-shadow: inset 0 -4px 0 #a02040; }}
@@ -202,7 +222,7 @@ class Panel(base.Panel):
                   border: 3px solid #2d3033; }}
         .ax-sw {{ border-radius: 100px; min-width: {px(46)}px; min-height: {px(46)}px; padding: 0; border: 2px solid #2d3033; }}
         .ax-pill {{ background: {CARD}; border-radius: 100px; padding: 2px {px(10)}px;
-                   font-size: {px(13)}px; color: {MUTED}; }}
+                   font-size: {fs(13)}px; color: {MUTED}; }}
         .ax-row {{ background: transparent; border-bottom: 1px solid #26282b; padding: {px(6)}px 0; }}
         scale trough {{ min-height: {px(10)}px; border-radius: 6px; background: #26282b; }}
         scale highlight {{ border-radius: 6px; background: {GREEN}; }}
@@ -330,14 +350,12 @@ class Panel(base.Panel):
             top.pack_start(w, False, False, 0)
         self.ax_unit_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         top.pack_end(self.ax_unit_box, False, False, 0)
-        page.pack_start(top, False, False, 0)
         srow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.status_label = self._lbl("ACE: ...", "ax-m")
         srow.pack_start(self.status_label, True, True, 0)
         rb = self._btn("Refresh", lambda: self.refresh_status(None))
         rb.get_style_context().add_class("ax-small")
         srow.pack_end(rb, False, False, 0)
-        page.pack_start(srow, False, False, 0)
 
         # slots + filament path
         self.ax_slot_holder = Gtk.Box(
@@ -350,17 +368,6 @@ class Panel(base.Panel):
         self.ax_path.set_hexpand(True)
         self.ax_path.set_vexpand(True)
         self.ax_path.connect("draw", self._draw_path)
-        if self._ax_portrait:
-            body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-            body.pack_start(self.ax_slot_holder, False, False, 0)
-            body.pack_start(self.ax_path, True, True, 0)
-        else:
-            body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-            self.ax_slot_holder.set_size_request(int(220 * self.ax_scale), -1)
-            body.pack_start(self.ax_slot_holder, False, False, 0)
-            body.pack_start(self.ax_path, True, True, 0)
-        page.pack_start(body, True, True, 0)
-
         acts = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         acts.set_homogeneous(True)
         self.ax_btn_load = self._btn("Load", self._home_load, "ax-green")
@@ -369,7 +376,26 @@ class Panel(base.Panel):
         acts.pack_start(self.ax_btn_unload, True, True, 0)
         acts.pack_start(self._btn("Dryer", lambda: self._show("dryer"), "ax-blue"), True, True, 0)
         acts.pack_start(self._btn("More", lambda: self._show("tools"), "ax-blue"), True, True, 0)
-        page.pack_start(acts, False, False, 0)
+        if self._ax_portrait:
+            page.pack_start(top, False, False, 0)
+            page.pack_start(srow, False, False, 0)
+            body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+            body.pack_start(self.ax_slot_holder, False, False, 0)
+            body.pack_start(self.ax_path, True, True, 0)
+            page.pack_start(body, True, True, 0)
+            page.pack_start(acts, False, False, 0)
+        else:
+            # landscape: slots on the left, everything else stacked on the right
+            self.ax_slot_holder.set_size_request(int(210 * max(self.ax_scale, 0.75)), -1)
+            right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            right.pack_start(top, False, False, 0)
+            right.pack_start(srow, False, False, 0)
+            right.pack_start(self.ax_path, True, True, 0)
+            right.pack_start(acts, False, False, 0)
+            body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            body.pack_start(self.ax_slot_holder, False, False, 0)
+            body.pack_start(right, True, True, 0)
+            page.pack_start(body, True, True, 0)
         self._rebuild_slots()
         self._rebuild_unit_tabs()
         return page
@@ -491,6 +517,9 @@ class Panel(base.Panel):
 
     def update_slots_from_data(self, instance_id, slot_data):
         super().update_slots_from_data(instance_id, slot_data)
+        if not getattr(self, "_ax_portrait", True):
+            for lab in self.instance_data[instance_id].get("slot_labels", []):
+                lab.set_text(lab.get_text().replace("\n", " ").strip())
 
     def _set_slot_visual_state(self, instance_id, local_slot, is_ready):
         try:
@@ -1382,14 +1411,14 @@ class Panel(base.Panel):
         cr.stroke()
         cr.set_source_rgb(0.91, 0.9, 0.88)
         cr.select_font_face("DejaVu Sans", 0, 1)
-        cr.set_font_size(38 * self.ax_scale)
+        cr.set_font_size(max(14, 38 * self.ax_scale if r > 70 else r * 0.5))
         t = f"{cur:.0f}°"
         ex = cr.text_extents(t)
         cr.move_to(cx - ex.width / 2, cy + 8)
         cr.show_text(t)
-        cr.set_font_size(15 * self.ax_scale)
+        cr.set_font_size(max(9, 15 * self.ax_scale))
         cr.set_source_rgb(0.55, 0.57, 0.59)
-        t2 = f"inside the ACE · target {tgt:.0f}°"
+        t2 = f"target {tgt:.0f}°" if r < 70 else f"inside the ACE · target {tgt:.0f}°"
         ex = cr.text_extents(t2)
         cr.move_to(cx - ex.width / 2, cy + 32)
         cr.show_text(t2)
