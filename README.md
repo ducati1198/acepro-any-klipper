@@ -722,6 +722,23 @@ Orders are saved and also set from the slot window in Fluidd.
 
 ---
 
+### Spoolman (optional)
+
+If you said yes to "Add the Spoolman helpers?", `spoolman_logic.cfg` was copied next to your config. Uncomment `#[include spoolman_logic.cfg]` in `acepro.cfg` and make sure Spoolman is set up in `moonraker.conf` and `[save_variables]` is in your printer config. Each tool change then tells Spoolman which spool is in use. The spool is found in this order:
+
+1. **A manual lock** you set with `SPOOLMAN_MANUAL_SLOT SLOT=<0-7> ID=<spool id>`. It holds until the spool in that slot changes.
+2. **The RFID tag.** A tag you wrote yourself with a plain number is used as the Spoolman ID. A locked Anycubic tag has a SKU (for example `HPL17-103`), which is looked up in your saved SKU table.
+3. Nothing found: the active spool is cleared and the console says so.
+
+Link a SKU to a Spoolman spool once, from the Fluidd or Mainsail console. The link is saved in `variables.cfg`:
+
+```
+MAP_SKU SKU="HPL17-103" ID=1      # link it
+UNMAP_SKU SKU="HPL17-103"         # remove the link
+```
+
+(The SKU mapping is from [Kobra-S1/ACEPRO](https://github.com/Kobra-S1/ACEPRO). The old table that sat inside the macro is gone, so add your SKUs with `MAP_SKU` once after updating.)
+
 ## 12. Connection supervision
 
 The driver watches how stable the USB link is. Six or more reconnects in three minutes pauses the print. It is on by default:

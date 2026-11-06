@@ -425,5 +425,12 @@ check "driver publishes the phase and steps"         bash -c 'grep -q "toolchang
 check "unload waits before the ACE pulls"            bash -c 'grep -q "_start_queued_toolhead_moves()" "$0/extras/ace/manager.py" && grep -q "monotonic() + 0.25" "$0/extras/ace/manager.py"' "$REPO"
 check "Fluidd Unload buttons run UNLOAD_TOOL"        bash -c '! grep -qE "aceSendGcode\(.TR.\)|run\(.TR., true\)" "$0/fluidd/fluidd-acepro.patch"' "$REPO"
 
+echo "28. Spoolman SKU mapping (MAP_SKU / UNMAP_SKU)"
+check "MAP_SKU macro exists"                         grep -q '^\[gcode_macro MAP_SKU\]' "$REPO/config/spoolman_logic.cfg"
+check "UNMAP_SKU macro exists"                       grep -q '^\[gcode_macro UNMAP_SKU\]' "$REPO/config/spoolman_logic.cfg"
+check "SKU table comes from variables.cfg"           grep -q 'sv.sku_map|default' "$REPO/config/spoolman_logic.cfg"
+check "no hard-coded SKU table in the macro"         bash -c '! grep -q "set sku_map = {.HPL" "$0/config/spoolman_logic.cfg"' "$REPO"
+check "no German left in spoolman_logic.cfg"         bash -c '! grep -qiE "wurde|fehler|gefunden|bitte|loesch|verkn|dynamisch|für " "$0/config/spoolman_logic.cfg"' "$REPO"
+
 echo "Passed: $PASS   Failed: $FAIL"
 [ "$FAIL" -eq 0 ]

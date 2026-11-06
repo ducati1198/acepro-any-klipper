@@ -2,6 +2,7 @@
 
 ## 1.1.0 (safer installs, uninstall, doctor, position wizard)
 
+- **Spoolman: link a SKU with `MAP_SKU`.** `MAP_SKU SKU=<sku> ID=<spool id>` and `UNMAP_SKU SKU=<sku>` save the link in `variables.cfg`, so you no longer edit the macro. The spool lookup, the messages (now in English) and the manual lock are otherwise as before. Ported from upstream Kobra-S1/ACEPRO. **After updating:** the old built-in SKU table is gone, so run `MAP_SKU` once for each SKU you used.
 - **Simple AF hooks: no `ZERO_OUT_SERVO` in the heating nozzle (start and end), cancel, filament runout and nozzle wipe hooks.** The template no longer adds it there. Lines already in your own file stay as they are.
 - **Fixes.** `--update` saved "no servo" in `acepro-install.conf` for every install; it now reads what is installed (servo, cutter, poop bucket). The config check no longer crashes on a broken symlink include; it reports an error. The unused `variable_cut_retract_distance` is removed.
 - **Pause no longer leaves a blob.** The nozzle used to sit on the print for about 2 s while the servo was zeroed (twice, 0.8 s each) before it retracted and lifted. Now the pause retracts and lifts in one move first (`pause_zhop`, 2 mm, 0 = off), then zeroes the servo. In the Simple AF hook the order is `_ACE_ON_PAUSE`, then `ZERO_OUT_SERVO`; the standalone `PAUSE` does the same. The CFS chute variant is not changed.
