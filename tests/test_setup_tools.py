@@ -167,3 +167,35 @@ def test_selftest_reports_and_changes_nothing(tmp_path):
     assert "Nothing was changed" in text
     assert pr.ran == []
     assert (tmp_path / "acepro_macros.cfg").read_text() == CFG
+
+
+def test_selftest_uses_configured_sensor_names(tmp_path):
+    from ace.config import ACE_INSTANCES
+    pr, cmds = commands(tmp_path)
+
+    class Serial:
+        def get_connection_status(self):
+            return {"connected": True, "port": "x"}
+
+    class Obj:
+        def __init__(self, st=None, variables=None):
+            self.st, self.variables = st or {}, variables or {}
+
+        def get_status(self, t):
+            return self.st
+
+    ACE_INSTANCES.clear()
+    ACE_INSTANCES[0] = types.SimpleNamespace(
+        serial_mgr=Serial(), filament_runout_sensor_name_nozzle="my_nozzle",
+        filament_runout_sensor_name_rdm="my_rdm")
+    pr.objs["filament_switch_sensor my_nozzle"] = Obj({"filament_detected": False})
+    pr.objs["filament_switch_sensor my_rdm"] = Obj({"filament_detected": True})
+    g = Gcmd()
+    try:
+        cmds["ACE_SELFTEST"](g)
+    finally:
+        ACE_INSTANCES.clear()
+    text = g.out[0]
+    assert "PASS  toolhead sensor present (filament not detected)" in text
+    assert "PASS  RDM sensor present" in text
+    assert "FAIL  no toolhead filament sensor" not in text

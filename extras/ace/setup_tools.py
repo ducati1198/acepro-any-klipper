@@ -158,13 +158,19 @@ def make_commands(get_printer):
                 line("WARN", "ACE[%d] temperature reads %s" % (num, temp))
             else:
                 line("PASS", "ACE[%d] temperature %.1f C" % (num, temp))
-        nozzle = printer.lookup_object("filament_switch_sensor filament_runout_nozzle", None)
+        # sensor names come from [ace] (filament_runout_sensor_name_nozzle / _rdm), as the driver uses them
+        nozzle_name, rdm_name = "filament_runout_nozzle", None
+        for inst in ACE_INSTANCES.values():
+            nozzle_name = getattr(inst, "filament_runout_sensor_name_nozzle", None) or nozzle_name
+            rdm_name = getattr(inst, "filament_runout_sensor_name_rdm", None) or rdm_name
+            break
+        nozzle = printer.lookup_object("filament_switch_sensor " + nozzle_name, None)
         if nozzle is None:
-            line("FAIL", "no toolhead filament sensor (filament_runout_nozzle)")
+            line("FAIL", "no toolhead filament sensor (%s)" % nozzle_name)
         else:
             line("PASS", "toolhead sensor present (filament %s)" %
                  ("detected" if nozzle.get_status(eventtime).get("filament_detected") else "not detected"))
-        for name in ("filament_runout_rdm",):
+        for name in ((rdm_name,) if rdm_name else ("filament_runout_rdm",)):
             if printer.lookup_object("filament_switch_sensor " + name, None) is not None:
                 line("PASS", "RDM sensor present")
         if printer.lookup_object("filament_motion_sensor ace_encoder", None) is not None:
