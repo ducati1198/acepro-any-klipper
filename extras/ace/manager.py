@@ -181,6 +181,9 @@ class AceManager:
         self.default_color_change_purge_speed = float(self.ace_config["default_color_change_purge_speed"])
         self.toolchange_purge_length = self.default_color_change_purge_length
         self.toolchange_purge_speed = self.default_color_change_purge_speed
+        # True when ACE_SET_PURGE_AMOUNT set a value for the NEXT tool change only;
+        # cleared (and the config defaults restored) after that change's purge.
+        self.purge_override_pending = False
         self.purge_max_chunk_length = float(self.ace_config["purge_max_chunk_length"])
         self.pre_cut_retract_length = float(self.ace_config["pre_cut_retract_length"])
         self.toolchange_homing_axes = self.ace_config.get("toolchange_homing_axes", "xyz")
@@ -3622,6 +3625,13 @@ class AceManager:
                 f"TARGET_TEMP={target_temp} PURGED_AMOUNT={purged_amount:.1f} "
                 f"PURGE_MAX_CHUNK_LENGTH={self.purge_max_chunk_length}"
             )
+
+            # One-shot: a value set with ACE_SET_PURGE_AMOUNT applies to this tool change only.
+            if self.purge_override_pending:
+                self.toolchange_purge_length = self.default_color_change_purge_length
+                self.toolchange_purge_speed = self.default_color_change_purge_speed
+                self.purge_override_pending = False
+                logging.info("ACE: one-shot purge override used, defaults restored")
 
             self.record_stat("tool_changes", 1)
             self.record_stat("purge_mm", final_purge_length)

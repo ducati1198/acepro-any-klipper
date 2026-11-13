@@ -912,7 +912,10 @@ def cmd_ACE_DISABLE_FEED_ASSIST(gcmd):
 
 def cmd_ACE_SET_PURGE_AMOUNT(gcmd):
     """
-    Set purge amount and speed for next toolchange.
+    Set purge amount and speed for the NEXT toolchange only.
+
+    After that change the config defaults (default_color_change_purge_length/_speed)
+    are used again, until this command is sent again.
 
     Usage: ACE_SET_PURGE_AMOUNT PURGELENGTH=<mm> [PURGESPEED=<mm/min>] [INSTANCE=]
 
@@ -937,10 +940,11 @@ def cmd_ACE_SET_PURGE_AMOUNT(gcmd):
 
         manager.toolchange_purge_length = purge_length
         manager.toolchange_purge_speed = purge_speed
+        manager.purge_override_pending = True
 
         gcmd.respond_info(
             f"ACE: Purge settings updated - "
-            f"Length: {purge_length}mm, Speed: {purge_speed}mm/min"
+            f"Length: {purge_length}mm, Speed: {purge_speed}mm/min (next tool change only)"
         )
 
     except Exception as e:
