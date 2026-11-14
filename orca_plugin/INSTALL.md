@@ -4,6 +4,10 @@
 
 ![Spools and Toolheads panel on a K1 Max with an ACE Pro](spool-toolhead-mapper-ace.png)
 
+**Keep the file name `spool_toolhead_mapper.py`.** Orca builds the plugin's name from the file name, so a dot or a space in it (for example `spool_toolhead_mapper 2.py` or `..._0.7.1.py`) makes the plugin fail to activate with no message.
+
+**Printer address:** if Orca does not give the plugin a print host, the panel has an address box at the top: type the printer's address once for each printer preset (for example `10.11.88.30`) and press **Save address**. A grey status line shows when a button press was sent and answered, and `~/.spool_toolhead_mapper.log` records what the plugin read and showed. A printer with both the ACE driver and the WonderMaker toolhead sensors is shown as the four toolheads; set `printer_kind` to `ace` in the plugin's config to force the ACE side.
+
 **What the panel does for you:** it refreshes by itself when you switch printer preset (a few seconds), it remembers your picks per printer between Orca sessions (they are dropped when a filament's colour or type changes), and it shows hints under a filament when two filaments use the same slot or toolhead, when the colour is clearly different, or (WonderMaker) when the chosen toolhead shows empty. Empty WonderMaker toolheads can be picked, with a warning; empty ACE slots stay blocked. Picks are saved in `~/.spool_toolhead_mapper.json` (if Orca does not allow writing it, they last for the session).
 
 
