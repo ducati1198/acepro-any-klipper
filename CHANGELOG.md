@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.2 (OrcaSlicer plugin 0.7.2)
+
+- **OrcaSlicer plugin 0.7.2 (`orca_plugin/spool_toolhead_mapper.py`).** The `FILE=` part of `WM_SET_TOOL_MAP` / `ACE_SET_TOOL_MAP` now holds only the file name, not the full folder path Orca gives. Fluidd and the macro compare file names, so with a full path your "Choose toolheads" choice in Fluidd was always overwritten by Orca's map; now it is kept. The slicing step also writes lines to `~/.spool_toolhead_mapper.log` (started, skipped, what it wrote). 3 new tests.
+
 ## 1.1.1 (OrcaSlicer plugin 0.7.1)
 
 - **`orca_plugin/spool_toolhead_mapper.py` 0.7.1** (same plugin as in wm-ultra-fluidd-acepro-panel 1.7.8). An address box per printer preset (Orca did not always give the plugin the print host), quote marks removed from the host, the panel notices a printer switch and filament changes, reads the printer again every 30 seconds, a `printer_kind` setting (auto, wm, ace), a status line and a log file (`~/.spool_toolhead_mapper.log`) for troubleshooting. A printer with both the ACE driver and the WonderMaker toolhead sensors is shown as the four toolheads; ACE-only printers such as the K1 are unchanged. The file must keep the name `spool_toolhead_mapper.py` (a dot or space in the name stops Orca from activating it). New test `tests/test_orca_plugin.py` (36 checks).

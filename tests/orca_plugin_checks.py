@@ -46,6 +46,8 @@ check("pinned 'as sliced' is kept", res[0] == 0)
 lines = m.map_lines({0: 1, 1: 0}, "benchy.gcode", "x", "wm")
 check("full map written", lines[1].strip() == "WM_SET_TOOL_MAP MAP=0:1,1:0,2:2,3:3 FILE=benchy.gcode KEEP_EXISTING=1")
 check("identity map still written", "MAP=0:0,1:1,2:2,3:3" in m.map_lines({}, "", "s", "wm")[1])
+check("full Mac path is cut to the file name", "FILE=Cube_PLA.gcode " in m.map_lines({}, "/Users/me/Downloads/Cube_PLA.gcode", "s", "wm")[1])
+check("Windows path is cut to the file name", "FILE=Cube_PLA.gcode " in m.map_lines({}, "C:\\\\Users\\\\me\\\\Cube_PLA.gcode", "s", "wm")[1])
 check("file name with spaces is quoted", 'FILE="my part.gcode"' in m.map_lines({}, "my part.gcode", "s", "wm")[1])
 
 g = ["; header\n", "; thumb\n", "M104 S0\n", "T1\n"]

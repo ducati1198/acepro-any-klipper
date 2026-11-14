@@ -5,7 +5,7 @@
 # name = "Spool and Toolhead Mapper"
 # description = "One plugin for two printers: ACE Pro (acepro-any-klipper) and WonderMaker ZR Ultra-S toolheads. It asks the printer which one it is, shows the spools or toolheads in a panel, and writes the choice into the G-code (ACE_SET_TOOL_MAP or WM_SET_TOOL_MAP)."
 # author = "ducati1198"
-# version = "0.7.1"
+# version = "0.7.2"
 # ///
 """Spool and Toolhead Mapper for OrcaSlicer 2.5.
 
@@ -432,6 +432,11 @@ def gcode_param(value):
     return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def short_name(value):
+    """Only the file name, no folders (Fluidd and Moonraker store the name only, the macro compares them)."""
+    return re.split(r"[\\/]", str(value or "").strip())[-1]
+
+
 def map_lines(mapping, output_name, summary, kind="ace"):
     if kind == "wm":    # the WonderMaker macro always gets all four print tools (a map from an earlier print is never reused)
         full = {t: t for t in range(HEADS)}
@@ -440,8 +445,8 @@ def map_lines(mapping, output_name, summary, kind="ace"):
     else:
         pairs = ",".join(f"{a}:{b}" for a, b in sorted(mapping.items()) if a != b)
     cmd = f"{KINDS.get(kind, KINDS['ace'])} MAP={pairs}"
-    if output_name:
-        cmd += f" FILE={gcode_param(output_name)}"
+    if short_name(output_name):
+        cmd += f" FILE={gcode_param(short_name(output_name))}"
     cmd += " KEEP_EXISTING=1"
     return [f"; Spool and Toolhead Mapper ({kind}): {summary}\n", cmd + "\n"]
 
@@ -1179,7 +1184,9 @@ class SpoolToolheadMap(orca.slicing.SlicingPipelineCapabilityBase):
             return orca.ExecutionResult.success()
         if not ctx.gcode_path:
             return orca.ExecutionResult.success("Spool and Toolhead Map: no G-code path")
+        log_line(f"slicing step: started for {short_name(ctx.output_name)!r}")
         if not STATE["enabled"]:
+            log_line("slicing step: skipped, disabled in the panel")
             return orca.ExecutionResult.success("Spool and Toolhead Map: disabled in the Spools and Toolheads panel")
 
         cfg = _config(self)
@@ -1226,7 +1233,7 @@ class SpoolToolheadMap(orca.slicing.SlicingPipelineCapabilityBase):
             ident = ",".join(f"{t}:{t}" for t in range(HEADS)) if kind == "wm" else ""
             new_lines = [
                 f"; Spool and Toolhead Mapper: no {name} data (open the Spools and Toolheads panel and Refresh) - as sliced\n",
-                f"{KINDS[kind]} MAP={ident}" + (f" FILE={gcode_param(ctx.output_name)}" if ctx.output_name else "")
+                f"{KINDS[kind]} MAP={ident}" + (f" FILE={gcode_param(short_name(ctx.output_name))}" if short_name(ctx.output_name) else "")
                 + " KEEP_EXISTING=1\n",
             ]
         else:
@@ -1234,7 +1241,7 @@ class SpoolToolheadMap(orca.slicing.SlicingPipelineCapabilityBase):
             for t in used:
                 mapping.setdefault(t, t)
             summary = describe(mapping, filaments, spools, kind)
-            STATE["last_written"] = f"{ctx.output_name or 'G-code'}: {summary}"
+            STATE["last_written"] = f"{short_name(ctx.output_name) or 'G-code'}: {summary}"
             new_lines = map_lines(mapping, ctx.output_name, summary, kind)
 
         lines = insert_before_first_command(lines, new_lines)
@@ -1247,6 +1254,7 @@ class SpoolToolheadMap(orca.slicing.SlicingPipelineCapabilityBase):
                 STATE["last_purge"] = f"purge step failed: {e}"
         with open(ctx.gcode_path, "w", encoding="utf-8") as f:
             f.writelines(lines)
+        log_line(f"slicing step: kind={kind} file={short_name(ctx.output_name)!r} wrote: {STATE['last_written']}")
         extra = f"; purge: {STATE['last_purge']}" if STATE["last_purge"] and kind == "ace" and purge["enabled"] else ""
         return orca.ExecutionResult.success("Spool and Toolhead Map: " + STATE["last_written"] + extra)
 
